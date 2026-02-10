@@ -1,0 +1,56 @@
+{{ define "dashboard" }}
+<div class="card">
+  <h2>Today's Situation</h2>
+  <div class="situation">{{ .Situation }}</div>
+  <div class="status-grid">
+    <div class="card"><strong>Grain</strong><br>{{ .World.GrainTier }}</div>
+    <div class="card"><strong>Unrest</strong><br>{{ .World.UnrestTier }}</div>
+    <div class="card"><strong>You</strong><br>{{ .Player.Gold }}g · {{ .PlayerTitle }}</div>
+  </div>
+</div>
+<div class="card" style="margin-top:12px;">
+  <h3>Contracts</h3>
+  <div class="muted">Accepted by you: {{ .AcceptedCount }} · Visible: {{ .VisibleContractN }}</div>
+  <div class="contracts" style="margin-top:8px;">
+    {{ range .Contracts }}
+      <div class="contract {{ .UrgencyClass }}">
+        <div><strong>{{ .Type }}</strong> <span class="pill">{{ .Status }}</span></div>
+        <div class="meta">
+          <span>Deadline: {{ .DeadlineTicks }} ticks</span>
+          <span>Taken by: {{ .OwnerName }}</span>
+        </div>
+        <div class="actions">
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="accept">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button type="submit">Accept</button>
+          </form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="ignore">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button class="secondary" type="submit">Ignore</button>
+          </form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="abandon">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button class="secondary" type="submit">Abandon</button>
+          </form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="deliver">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button class="warn" type="submit">Deliver (-2g)</button>
+          </form>
+        </div>
+      </div>
+    {{ else }}
+      <div class="muted">No contracts on the board.</div>
+    {{ end }}
+  </div>
+  <div class="actions" style="margin-top:10px;">
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="investigate">
+      <button type="submit">Investigate</button>
+    </form>
+  </div>
+</div>
+{{ end }}

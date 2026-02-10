@@ -1,0 +1,37 @@
+{{ define "index" }}
+<header class="header">
+  <h1>Black Granary</h1>
+  <div class="muted">Shared test realm. Day {{ .World.DayNumber }} · {{ .World.Subphase }} · You are {{ .Player.Name }}</div>
+</header>
+<div class="layout">
+  <div>
+    <div id="dashboard">
+      {{ template "dashboard" . }}
+    </div>
+  </div>
+  <div class="stack">
+    <div id="event-log" class="card"
+      hx-get="/frag/events"
+      hx-trigger="every 5s"
+      hx-target="#event-log"
+      hx-swap="innerHTML">
+      {{ template "events_inner" . }}
+    </div>
+    <div id="chat" class="card"
+      hx-get="/frag/chat"
+      hx-trigger="every 2s"
+      hx-target="#chat"
+      hx-swap="innerHTML">
+      {{ template "chat_inner" . }}
+    </div>
+    <div id="players" class="card"
+      hx-get="/frag/players"
+      hx-trigger="every 5s"
+      hx-target="#players"
+      hx-swap="innerHTML">
+      {{ template "players_inner" . }}
+    </div>
+    <div id="toast" class="toast">{{ if .Toast }}{{ .Toast }}{{ else }}&nbsp;{{ end }}</div>
+  </div>
+</div>
+{{ end }}

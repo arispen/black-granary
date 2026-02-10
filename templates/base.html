@@ -1,0 +1,113 @@
+{{ define "base" }}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Black Granary</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111823;
+      --panel-soft: #0e141d;
+      --border: #283445;
+      --text: #e6edf6;
+      --muted: #a0aec0;
+      --good: #4ddf8f;
+      --warn: #f7bd4a;
+      --bad: #ff6b6b;
+      --accent: #4ea7ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 20% 0%, #131d2c, var(--bg) 48%);
+      min-height: 100vh;
+      padding: 18px;
+    }
+    .header { margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 1.45rem; }
+    .muted { color: var(--muted); }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .stack { display: grid; gap: 12px; }
+    .card {
+      background: linear-gradient(180deg, var(--panel), var(--panel-soft));
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    h2, h3 { margin: 0 0 8px 0; }
+    .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .pill { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; font-size: 0.78rem; }
+    .title-badge { border-color: #3c4b63; background: #172131; }
+    .online { color: var(--good); }
+    .offline { color: var(--muted); }
+    .contracts { display: grid; gap: 9px; }
+    .contract { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .contract.warning { border-color: #7a5d19; }
+    .contract.urgent { border-color: #7d2a2a; box-shadow: 0 0 0 1px #602121 inset; }
+    .contract .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    button {
+      border: 1px solid #3b4f69;
+      background: #1f3552;
+      color: #eef4ff;
+      border-radius: 7px;
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 0.86rem;
+    }
+    button:hover { background: #29466a; }
+    button.secondary { background: #212f42; }
+    button.secondary:hover { background: #2a3b52; }
+    button.warn { background: #553115; border-color: #784a20; }
+    button.warn:hover { background: #68401b; }
+    .events, .chat-log, .player-list { max-height: 260px; overflow-y: auto; display: grid; gap: 6px; }
+    .event-line, .chat-line, .player-line { border: 1px solid #223043; border-radius: 8px; padding: 7px 8px; background: #0f1722; }
+    .chat-meta, .event-meta { color: var(--muted); font-size: 0.75rem; margin-bottom: 4px; }
+    .chat-line.whisper { border-color: #5c486f; }
+    .chat-line.system { border-color: #44556f; }
+    .chat-form { margin-top: 9px; display: flex; gap: 8px; }
+    .chat-form input {
+      flex: 1;
+      border: 1px solid var(--border);
+      background: #0b131d;
+      border-radius: 7px;
+      color: var(--text);
+      padding: 8px;
+    }
+    .toast {
+      min-height: 24px;
+      border: 1px dashed #41536d;
+      border-radius: 8px;
+      padding: 6px 8px;
+      color: #c9d8eb;
+      background: #0f1825;
+      font-size: 0.86rem;
+    }
+    .situation {
+      border-left: 3px solid #547fb3;
+      padding-left: 10px;
+      margin-bottom: 10px;
+      font-size: 1rem;
+      line-height: 1.4;
+    }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      .status-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  {{ template "index" . }}
+</body>
+</html>
+{{ end }}

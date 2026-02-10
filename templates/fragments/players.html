@@ -1,0 +1,26 @@
+{{ define "players_inner" }}
+<h3>Players</h3>
+<div class="player-list">
+  {{ range .Players }}
+    <div class="player-line">
+      <strong>{{ .Name }}</strong>
+      <span class="pill title-badge">{{ .Title }}</span>
+      <div class="muted">{{ .Gold }}g · Rep {{ .Rep }} · {{ if .Online }}<span class="online">online</span>{{ else }}<span class="offline">away</span>{{ end }}</div>
+    </div>
+  {{ else }}
+    <div class="muted">No players known.</div>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "players" }}
+<div id="players" class="card">
+  {{ template "players_inner" . }}
+</div>
+{{ end }}
+
+{{ define "players_oob" }}
+<div id="players" hx-swap-oob="innerHTML" class="card">
+  {{ template "players_inner" . }}
+</div>
+{{ end }}

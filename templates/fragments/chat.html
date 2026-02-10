@@ -1,0 +1,34 @@
+{{ define "chat_inner" }}
+<h3>Chat</h3>
+<div class="chat-log">
+  {{ range .Chat }}
+    <div class="chat-line {{ .Kind }}">
+      <div class="chat-meta">{{ .At }} {{ if eq .Kind "whisper" }}[whisper]{{ else if eq .Kind "system" }}[system]{{ else }}[global]{{ end }}</div>
+      <div>
+        <strong>{{ .FromName }}</strong>
+        {{ if .FromTitle }} <span class="pill title-badge">{{ .FromTitle }}</span>{{ end }}
+        {{ if .ToName }} <span class="muted">to {{ .ToName }}</span>{{ end }}:
+        {{ .Text }}
+      </div>
+    </div>
+  {{ else }}
+    <div class="muted">Silence in the market lanes.</div>
+  {{ end }}
+</div>
+<form class="chat-form" hx-post="/chat" hx-target="#chat" hx-swap="innerHTML">
+  <input type="text" name="text" placeholder="Say something or /w Name message" maxlength="220" autocomplete="off">
+  <button type="submit">Send</button>
+</form>
+{{ end }}
+
+{{ define "chat" }}
+<div id="chat" class="card">
+  {{ template "chat_inner" . }}
+</div>
+{{ end }}
+
+{{ define "chat_oob" }}
+<div id="chat" hx-swap-oob="innerHTML" class="card">
+  {{ template "chat_inner" . }}
+</div>
+{{ end }}

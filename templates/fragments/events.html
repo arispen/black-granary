@@ -1,0 +1,25 @@
+{{ define "events_inner" }}
+<h3>Event Log</h3>
+<div class="events">
+  {{ range .Events }}
+    <div class="event-line">
+      <div class="event-meta">Day {{ .DayNumber }} · {{ .Subphase }} · {{ .At }}</div>
+      <div>{{ .Text }}</div>
+    </div>
+  {{ else }}
+    <div class="muted">No events yet.</div>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "events" }}
+<div id="event-log" class="card">
+  {{ template "events_inner" . }}
+</div>
+{{ end }}
+
+{{ define "events_oob" }}
+<div id="event-log" hx-swap-oob="innerHTML" class="card">
+  {{ template "events_inner" . }}
+</div>
+{{ end }}

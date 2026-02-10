@@ -1,0 +1,7 @@
+{{ define "toast" }}
+<div id="toast" class="toast">{{ if .Toast }}{{ .Toast }}{{ else }}&nbsp;{{ end }}</div>
+{{ end }}
+
+{{ define "toast_oob" }}
+<div id="toast" hx-swap-oob="innerHTML" class="toast">{{ if .Toast }}{{ .Toast }}{{ else }}&nbsp;{{ end }}</div>
+{{ end }}
