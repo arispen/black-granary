@@ -155,6 +155,7 @@ type PageData struct {
 	Events           []EventView
 	Players          []PlayerSummary
 	Chat             []ChatView
+	ChatDraft        string
 	Toast            string
 	AcceptedCount    int
 	VisibleContractN int
@@ -199,7 +200,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			setToastLocked(store, p.ID, "The city shifts with a new dawn.")
 		}
 
-		renderPage(w, tmpl, "base", buildPageDataLocked(store, p.ID))
+		renderPage(w, tmpl, "base", buildPageDataLocked(store, p.ID, true))
 	})
 
 	mux.HandleFunc("/frag/dashboard", func(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +212,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		defer store.mu.Unlock()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
-		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID), false)
+		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
 	})
 
 	mux.HandleFunc("/frag/events", func(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +224,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		defer store.mu.Unlock()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
-		renderPage(w, tmpl, "events_inner", buildPageDataLocked(store, p.ID))
+		renderPage(w, tmpl, "events_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
 	mux.HandleFunc("/frag/chat", func(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +236,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		defer store.mu.Unlock()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
-		renderPage(w, tmpl, "chat_inner", buildPageDataLocked(store, p.ID))
+		renderPage(w, tmpl, "chat_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
 	mux.HandleFunc("/frag/players", func(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +248,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		defer store.mu.Unlock()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
-		renderPage(w, tmpl, "players_inner", buildPageDataLocked(store, p.ID))
+		renderPage(w, tmpl, "players_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
 	mux.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +270,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		if tooSoon(store.LastActionAt[p.ID], now, actionCooldown) {
 			setToastLocked(store, p.ID, "Slow down.")
-			renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID), false)
+			renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
 			return
 		}
 		store.LastActionAt[p.ID] = now
@@ -278,7 +279,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		contractID := strings.TrimSpace(r.FormValue("contract_id"))
 
 		handleActionLocked(store, p, now, action, contractID)
-		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID), false)
+		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
 	})
 
 	mux.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
@@ -297,22 +298,29 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		p := ensurePlayerLocked(store, w, r)
 		now := time.Now().UTC()
 		p.LastSeen = now
+		rawMsg := r.FormValue("text")
+		msg := strings.TrimSpace(rawMsg)
 
 		if tooSoon(store.LastChatAt[p.ID], now, chatCooldown) {
 			setToastLocked(store, p.ID, "Chat cooldown active.")
-			renderChatResponse(w, tmpl, buildPageDataLocked(store, p.ID), true)
+			data := buildPageDataLocked(store, p.ID, true)
+			data.ChatDraft = rawMsg
+			renderChatResponse(w, tmpl, data, true)
 			return
 		}
 
-		msg := strings.TrimSpace(r.FormValue("text"))
 		if msg == "" {
-			renderChatResponse(w, tmpl, buildPageDataLocked(store, p.ID), true)
+			renderChatResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), true)
 			return
 		}
 
 		store.LastChatAt[p.ID] = now
-		handleChatLocked(store, p, now, msg)
-		renderChatResponse(w, tmpl, buildPageDataLocked(store, p.ID), true)
+		accepted := handleChatLocked(store, p, now, msg)
+		data := buildPageDataLocked(store, p.ID, true)
+		if !accepted {
+			data.ChatDraft = rawMsg
+		}
+		renderChatResponse(w, tmpl, data, true)
 	})
 
 	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
@@ -726,23 +734,24 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 	store.World.Situation = deriveSituation(store.World.GrainTier, store.World.UnrestTier)
 }
 
-func handleChatLocked(store *Store, p *Player, now time.Time, msg string) {
+func handleChatLocked(store *Store, p *Player, now time.Time, msg string) bool {
 	if strings.HasPrefix(strings.ToLower(msg), "/w ") {
 		target, body := resolveWhisperTargetLocked(store, strings.TrimSpace(msg[3:]))
 		if body == "" {
 			addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: "System", ToPlayerID: p.ID, ToName: p.Name, Text: "Usage: /w <Name> <message>", At: now, Kind: "system"})
 			setToastLocked(store, p.ID, "Invalid whisper format.")
-			return
+			return false
 		}
 		if target == nil {
 			addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: "System", ToPlayerID: p.ID, ToName: p.Name, Text: "Whisper target not found.", At: now, Kind: "system"})
 			setToastLocked(store, p.ID, "Player not found.")
-			return
+			return false
 		}
 		addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: p.Name, ToPlayerID: target.ID, ToName: target.Name, Text: body, At: now, Kind: "whisper"})
-		return
+		return true
 	}
 	addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: p.Name, Text: msg, At: now, Kind: "global"})
+	return true
 }
 
 func applyFulfillmentRewardsLocked(store *Store, c *Contract) {
@@ -929,7 +938,7 @@ func popToastLocked(store *Store, pid string) string {
 	return msg
 }
 
-func buildPageDataLocked(store *Store, playerID string) PageData {
+func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageData {
 	now := time.Now().UTC()
 	p := store.Players[playerID]
 	if p == nil {
@@ -989,6 +998,11 @@ func buildPageDataLocked(store *Store, playerID string) PageData {
 		chat = chat[len(chat)-80:]
 	}
 
+	toast := ""
+	if consumeToast {
+		toast = popToastLocked(store, playerID)
+	}
+
 	return PageData{
 		NowUTC:           now.Format(time.RFC3339),
 		Player:           p,
@@ -999,7 +1013,7 @@ func buildPageDataLocked(store *Store, playerID string) PageData {
 		Events:           events,
 		Players:          players,
 		Chat:             chat,
-		Toast:            popToastLocked(store, playerID),
+		Toast:            toast,
 		AcceptedCount:    playerAcceptedCountLocked(store, playerID),
 		VisibleContractN: len(contracts),
 	}

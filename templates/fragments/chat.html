@@ -16,7 +16,7 @@
   {{ end }}
 </div>
 <form class="chat-form" hx-post="/chat" hx-target="#chat" hx-swap="innerHTML">
-  <input type="text" name="text" placeholder="Say something or /w Name message" maxlength="220" autocomplete="off">
+  <input id="chat-input" type="text" name="text" value="{{ .ChatDraft }}" placeholder="Say something or /w Name message" maxlength="220" autocomplete="off">
   <button type="submit">Send</button>
 </form>
 {{ end }}

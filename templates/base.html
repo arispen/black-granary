@@ -108,6 +108,80 @@
 </head>
 <body>
   {{ template "index" . }}
+  <script>
+    const CHAT_BOTTOM_THRESHOLD_PX = 48;
+    const EVENTS_BOTTOM_THRESHOLD_PX = 48;
+    let chatShouldStickToBottom = true;
+    let chatForceStickToBottom = false;
+    let eventsShouldStickToBottom = true;
+
+    function isNearBottom(log, thresholdPx) {
+      if (!log) {
+        return true;
+      }
+      const remaining = log.scrollHeight - log.clientHeight - log.scrollTop;
+      return remaining <= thresholdPx;
+    }
+
+    function scrollChatToBottom() {
+      const log = document.querySelector("#chat .chat-log");
+      if (log) {
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+
+    function scrollEventsToBottom() {
+      const log = document.querySelector("#event-log .events");
+      if (log) {
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+
+    function getSwapElement(event) {
+      if (event.detail && event.detail.elt) {
+        return event.detail.elt;
+      }
+      return event.target;
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+      scrollChatToBottom();
+      scrollEventsToBottom();
+      chatShouldStickToBottom = true;
+      eventsShouldStickToBottom = true;
+    });
+    document.body.addEventListener("scroll", function (event) {
+      if (event.target && event.target.matches && event.target.matches("#event-log .events")) {
+        eventsShouldStickToBottom = isNearBottom(event.target, EVENTS_BOTTOM_THRESHOLD_PX);
+      }
+    }, true);
+    document.body.addEventListener("submit", function (event) {
+      if (event.target && event.target.matches(".chat-form")) {
+        chatForceStickToBottom = true;
+      }
+    });
+    document.body.addEventListener("htmx:beforeSwap", function (event) {
+      if (event.target && event.target.id === "chat") {
+        const log = event.target.querySelector(".chat-log");
+        chatShouldStickToBottom = chatForceStickToBottom || isNearBottom(log, CHAT_BOTTOM_THRESHOLD_PX);
+      }
+    });
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+      const swapped = getSwapElement(event);
+      if (swapped && swapped.id === "chat") {
+        if (chatShouldStickToBottom) {
+          scrollChatToBottom();
+        }
+        chatForceStickToBottom = false;
+      }
+      if (swapped && swapped.id === "event-log") {
+        if (eventsShouldStickToBottom) {
+          scrollEventsToBottom();
+        }
+      }
+    });
+    window.scrollChatToBottom = scrollChatToBottom;
+  </script>
 </body>
 </html>
 {{ end }}

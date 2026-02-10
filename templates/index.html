@@ -3,9 +3,13 @@
   <h1>Black Granary</h1>
   <div class="muted">Shared test realm. Day {{ .World.DayNumber }} · {{ .World.Subphase }} · You are {{ .Player.Name }}</div>
 </header>
-<div class="layout">
+  <div class="layout">
   <div>
-    <div id="dashboard">
+    <div id="dashboard"
+      hx-get="/frag/dashboard"
+      hx-trigger="every 5s"
+      hx-target="#dashboard"
+      hx-swap="innerHTML">
       {{ template "dashboard" . }}
     </div>
   </div>
@@ -19,7 +23,7 @@
     </div>
     <div id="chat" class="card"
       hx-get="/frag/chat"
-      hx-trigger="every 2s"
+      hx-trigger="every 2s[document.activeElement == null || document.activeElement.id !== 'chat-input']"
       hx-target="#chat"
       hx-swap="innerHTML">
       {{ template "chat_inner" . }}
