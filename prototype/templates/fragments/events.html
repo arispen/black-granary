@@ -1,0 +1,12 @@
+{{ define "events" }}
+<div id="event-log" class="panel event-log" hx-swap-oob="innerHTML">
+  <h2>Event Log</h2>
+  <ul>
+    {{ range .Events }}
+      <li><strong>{{ .Subphase }}</strong>: {{ .Text }}</li>
+    {{ else }}
+      <li class="subtle">No events yet.</li>
+    {{ end }}
+  </ul>
+</div>
+{{ end }}

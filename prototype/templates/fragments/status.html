@@ -1,0 +1,12 @@
+{{ define "status" }}
+<h2>Status</h2>
+<p><strong>Day:</strong> {{ .World.DayNumber }} ({{ .World.Subphase }})</p>
+<p><strong>Grain Supply:</strong> {{ .World.GrainSupply }}</p>
+<p><strong>Grain Tier:</strong> {{ .World.GrainTier }}</p>
+<p><strong>Unrest:</strong> {{ .World.UnrestValue }} ({{ .World.UnrestTier }})</p>
+<p><strong>Market Controls:</strong> {{ .World.RestrictedMarketsTicks }} ticks remaining</p>
+<form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="investigate">
+  <button type="submit" class="secondary">Investigate Rumors</button>
+</form>
+{{ end }}

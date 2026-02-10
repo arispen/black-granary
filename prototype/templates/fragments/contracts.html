@@ -1,0 +1,49 @@
+{{ define "contracts" }}
+<h2>Contracts</h2>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Type</th>
+      <th>Status</th>
+      <th>Deadline</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{ range .Contracts }}
+      <tr>
+        <td>{{ .ID }}</td>
+        <td>{{ .Type }}</td>
+        <td>{{ .Status }}</td>
+        <td>{{ .DeadlineTicks }}</td>
+        <td class="actions">
+          {{ if eq .Status "Issued" }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+              <input type="hidden" name="action" value="accept">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button type="submit">Accept</button>
+            </form>
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+              <input type="hidden" name="action" value="ignore">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button type="submit" class="secondary">Ignore</button>
+            </form>
+          {{ end }}
+          {{ if eq .Status "Accepted" }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+              <input type="hidden" name="action" value="deliver">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button type="submit">Deliver</button>
+            </form>
+          {{ end }}
+        </td>
+      </tr>
+    {{ else }}
+      <tr>
+        <td colspan="5" class="subtle">No contracts available.</td>
+      </tr>
+    {{ end }}
+  </tbody>
+</table>
+{{ end }}
