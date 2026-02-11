@@ -33,7 +33,25 @@
 <div class="muted" style="margin-top:8px;">Obligations</div>
 <div class="events" style="max-height:120px;">
   {{ range .Obligations }}
-    <div class="event-line"><div class="event-meta">{{ .CreditorName }} <- {{ .DebtorName }} · {{ .Reason }} · sev {{ .Severity }} · due {{ .DueIn }} · {{ .Status }}</div></div>
+    <div class="event-line">
+      <div class="event-meta">{{ .CreditorName }} <- {{ .DebtorName }} · {{ .Reason }} · sev {{ .Severity }} · cost {{ .Cost }}g · due {{ .DueIn }} · {{ .Status }}</div>
+      <div class="actions">
+        {{ if .CanSettle }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="settle_obligation">
+            <input type="hidden" name="obligation_id" value="{{ .ID }}">
+            <button class="secondary" type="submit" {{ if .SettleDisabled }}disabled{{ end }}>{{ .SettleLabel }}</button>
+          </form>
+        {{ end }}
+        {{ if .CanForgive }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="forgive_obligation">
+            <input type="hidden" name="obligation_id" value="{{ .ID }}">
+            <button class="secondary" type="submit">Forgive</button>
+          </form>
+        {{ end }}
+      </div>
+    </div>
   {{ else }}<div class="muted">No obligations.</div>{{ end }}
 </div>
 {{ end }}

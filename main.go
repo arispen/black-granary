@@ -51,6 +51,7 @@ const (
 	supplyContractMinReward     = 6
 	supplyContractMaxReward     = 60
 	supplyContractDeadlineTicks = 3
+	obligationDueTicks          = 3
 )
 
 type WorldState struct {
@@ -343,13 +344,18 @@ type LoanView struct {
 }
 
 type ObligationView struct {
-	ID           string
-	CreditorName string
-	DebtorName   string
-	Reason       string
-	Severity     int
-	DueIn        int64
-	Status       string
+	ID             string
+	CreditorName   string
+	DebtorName     string
+	Reason         string
+	Severity       int
+	DueIn          int64
+	Status         string
+	Cost           int
+	CanSettle      bool
+	SettleLabel    string
+	SettleDisabled bool
+	CanForgive     bool
 }
 
 type PlayerOption struct {
@@ -578,13 +584,14 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		store.LastActionAt[p.ID] = now
 
 		input := ActionInput{
-			Action:     strings.TrimSpace(r.FormValue("action")),
-			ContractID: strings.TrimSpace(r.FormValue("contract_id")),
-			Stance:     strings.TrimSpace(r.FormValue("stance")),
-			TargetID:   strings.TrimSpace(r.FormValue("target_id")),
-			Claim:      strings.TrimSpace(r.FormValue("claim")),
-			Topic:      strings.TrimSpace(r.FormValue("topic")),
-			LoanID:     strings.TrimSpace(r.FormValue("loan_id")),
+			Action:       strings.TrimSpace(r.FormValue("action")),
+			ContractID:   strings.TrimSpace(r.FormValue("contract_id")),
+			Stance:       strings.TrimSpace(r.FormValue("stance")),
+			TargetID:     strings.TrimSpace(r.FormValue("target_id")),
+			Claim:        strings.TrimSpace(r.FormValue("claim")),
+			Topic:        strings.TrimSpace(r.FormValue("topic")),
+			LoanID:       strings.TrimSpace(r.FormValue("loan_id")),
+			ObligationID: strings.TrimSpace(r.FormValue("obligation_id")),
 		}
 		if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("amount"))); err == nil {
 			input.Amount = n
@@ -1158,6 +1165,34 @@ func processFinanceTickLocked(store *Store, now time.Time) {
 		store.World.UnrestValue = clampInt(store.World.UnrestValue+defaultsThisTick*2, 0, 100)
 		store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
 	}
+
+	overdueThisTick := 0
+	for _, ob := range store.Obligations {
+		if ob.Status != "Open" || ob.DueTick > store.TickCount {
+			continue
+		}
+		ob.Status = "Overdue"
+		overdueThisTick++
+		debtor := store.Players[ob.DebtorPlayerID]
+		creditor := store.Players[ob.CreditorPlayerID]
+		if debtor != nil {
+			debtor.Rep = clampInt(debtor.Rep-(1+ob.Severity), -100, 100)
+			debtor.Heat = clampInt(debtor.Heat+maxInt(1, ob.Severity/2), 0, 20)
+		}
+		if creditor != nil {
+			creditor.Rep = clampInt(creditor.Rep+1, -100, 100)
+		}
+		addEventLocked(store, Event{
+			Type:     "Finance",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] falls behind on a favor owed to [%s].", ob.DebtorName, ob.CreditorName),
+			At:       now,
+		})
+	}
+	if overdueThisTick > 0 {
+		store.World.UnrestValue = clampInt(store.World.UnrestValue+overdueThisTick, 0, 100)
+		store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+	}
 }
 
 func processPlayerTickLocked(store *Store) {
@@ -1225,9 +1260,13 @@ func addObligationLocked(store *Store, creditor, debtor *Player, reason string, 
 		DebtorName:       debtor.Name,
 		Reason:           reason,
 		Severity:         clampInt(severity, 1, 5),
-		DueTick:          store.TickCount + 3,
+		DueTick:          store.TickCount + obligationDueTicks,
 		Status:           "Open",
 	}
+}
+
+func obligationCost(severity int) int {
+	return clampInt(severity*3, 3, 20)
 }
 
 func applyBountyResolutionLocked(store *Store, hunter, target *Player, ev *Evidence, now time.Time) {
@@ -1320,16 +1359,17 @@ func chooseTopic(given, fallback string) string {
 }
 
 type ActionInput struct {
-	Action     string
-	ContractID string
-	Stance     string
-	TargetID   string
-	Claim      string
-	Topic      string
-	LoanID     string
-	Amount     int
-	Sacks      int
-	Reward     int
+	Action       string
+	ContractID   string
+	Stance       string
+	TargetID     string
+	Claim        string
+	Topic        string
+	LoanID       string
+	ObligationID string
+	Amount       int
+	Sacks        int
+	Reward       int
 }
 
 func handleActionLocked(store *Store, p *Player, now time.Time, action, contractID string, stanceInput ...string) {
@@ -1712,6 +1752,58 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		processLoanDefaultLocked(store, loan, now)
 		setToastLocked(store, p.ID, "You defaulted on the loan.")
+	case "settle_obligation":
+		ob := store.Obligations[in.ObligationID]
+		if ob == nil || (ob.Status != "Open" && ob.Status != "Overdue") {
+			setToastLocked(store, p.ID, "No outstanding obligation found.")
+			return
+		}
+		if ob.DebtorPlayerID != p.ID {
+			setToastLocked(store, p.ID, "Only the debtor can settle this.")
+			return
+		}
+		cost := obligationCost(ob.Severity)
+		if p.Gold < cost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to settle.", cost))
+			return
+		}
+		p.Gold -= cost
+		if creditor := store.Players[ob.CreditorPlayerID]; creditor != nil {
+			creditor.Gold += cost
+			creditor.Rep = clampInt(creditor.Rep+1, -100, 100)
+		}
+		p.Rep = clampInt(p.Rep+2, -100, 100)
+		p.Heat = maxInt(0, p.Heat-1)
+		ob.Status = "Settled"
+		addEventLocked(store, Event{
+			Type:     "Finance",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] settles a favor owed to [%s].", ob.DebtorName, ob.CreditorName),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, "Obligation settled.")
+	case "forgive_obligation":
+		ob := store.Obligations[in.ObligationID]
+		if ob == nil || (ob.Status != "Open" && ob.Status != "Overdue") {
+			setToastLocked(store, p.ID, "No outstanding obligation found.")
+			return
+		}
+		if ob.CreditorPlayerID != p.ID {
+			setToastLocked(store, p.ID, "Only the creditor can forgive this.")
+			return
+		}
+		ob.Status = "Forgiven"
+		p.Rep = clampInt(p.Rep+2, -100, 100)
+		if debtor := store.Players[ob.DebtorPlayerID]; debtor != nil {
+			debtor.Rep = clampInt(debtor.Rep+1, -100, 100)
+		}
+		addEventLocked(store, Event{
+			Type:     "Finance",
+			Severity: 1,
+			Text:     fmt.Sprintf("[%s] forgives a favor owed by [%s].", ob.CreditorName, ob.DebtorName),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, "Obligation forgiven.")
 	case "buy_grain":
 		amount := clampInt(in.Amount, 1, marketMaxTrade)
 		if amount <= 0 {
@@ -2679,14 +2771,28 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if ob.DebtorPlayerID != p.ID && ob.CreditorPlayerID != p.ID {
 			continue
 		}
+		cost := obligationCost(ob.Severity)
+		canSettle := ob.DebtorPlayerID == p.ID && (ob.Status == "Open" || ob.Status == "Overdue")
+		settleLabel := fmt.Sprintf("Settle (%dg)", cost)
+		settleDisabled := false
+		if canSettle && p.Gold < cost {
+			settleDisabled = true
+			settleLabel = fmt.Sprintf("Need %dg", cost)
+		}
+		canForgive := ob.CreditorPlayerID == p.ID && (ob.Status == "Open" || ob.Status == "Overdue")
 		obligations = append(obligations, ObligationView{
-			ID:           ob.ID,
-			CreditorName: ob.CreditorName,
-			DebtorName:   ob.DebtorName,
-			Reason:       ob.Reason,
-			Severity:     ob.Severity,
-			DueIn:        int64(maxInt(0, int(ob.DueTick-store.TickCount))),
-			Status:       ob.Status,
+			ID:             ob.ID,
+			CreditorName:   ob.CreditorName,
+			DebtorName:     ob.DebtorName,
+			Reason:         ob.Reason,
+			Severity:       ob.Severity,
+			DueIn:          int64(maxInt(0, int(ob.DueTick-store.TickCount))),
+			Status:         ob.Status,
+			Cost:           cost,
+			CanSettle:      canSettle,
+			SettleLabel:    settleLabel,
+			SettleDisabled: settleDisabled,
+			CanForgive:     canForgive,
 		})
 	}
 	sort.Slice(obligations, func(i, j int) bool { return obligations[i].ID > obligations[j].ID })

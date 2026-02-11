@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.6.0
+- Added obligation costs with settle and forgive actions in the ledger.
+- Overdue obligations now apply heat/rep penalties and raise unrest.
+- Ledger UI shows obligation cost, status, and action states.
+
 ## 0.5.0
 - Added player-posted supply contracts with escrowed rewards and sack requirements.
 - Supply contracts now show issuer, reward, and requirements, with issuer withdrawal available.

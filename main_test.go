@@ -220,6 +220,47 @@ func TestDeliveryCompletionIncrementsImpactAndHeat(t *testing.T) {
 	}
 }
 
+func TestObligationOverdueAndSettle(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	creditor := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 0, Rep: 0, Heat: 0, LastSeen: now}
+	debtor := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, Heat: 0, LastSeen: now}
+	s.Players[creditor.ID] = creditor
+	s.Players[debtor.ID] = debtor
+
+	ob := &Obligation{
+		ID:               "o-1",
+		CreditorPlayerID: creditor.ID,
+		CreditorName:     creditor.Name,
+		DebtorPlayerID:   debtor.ID,
+		DebtorName:       debtor.Name,
+		Reason:           "silence payment",
+		Severity:         3,
+		DueTick:          s.TickCount,
+		Status:           "Open",
+	}
+	s.Obligations[ob.ID] = ob
+
+	processFinanceTickLocked(s, now)
+	if ob.Status != "Overdue" {
+		t.Fatalf("expected obligation overdue, got %s", ob.Status)
+	}
+	if debtor.Rep != -4 || debtor.Heat != 1 {
+		t.Fatalf("expected overdue penalties, rep=%d heat=%d", debtor.Rep, debtor.Heat)
+	}
+
+	handleActionInputLocked(s, debtor, now, ActionInput{Action: "settle_obligation", ObligationID: ob.ID})
+	if ob.Status != "Settled" {
+		t.Fatalf("expected obligation settled, got %s", ob.Status)
+	}
+	if debtor.Gold != 11 || creditor.Gold != 9 {
+		t.Fatalf("expected settlement transfer, debtor=%d creditor=%d", debtor.Gold, creditor.Gold)
+	}
+	if debtor.Rep != -2 || debtor.Heat != 0 {
+		t.Fatalf("expected settlement recovery, rep=%d heat=%d", debtor.Rep, debtor.Heat)
+	}
+}
+
 func TestSupplyContractFlow(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
