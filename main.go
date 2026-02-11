@@ -60,6 +60,7 @@ const (
 	messageBodyMax              = 260
 	fieldworkCooldownTicks      = 2
 	fieldworkSupplyCost         = 1
+	permitDurationTicks         = 3
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -218,6 +219,16 @@ type Obligation struct {
 	Status           string
 }
 
+type Permit struct {
+	PlayerID     string
+	PlayerName   string
+	IssuerID     string
+	IssuerName   string
+	TicksLeft    int
+	TotalTicks   int
+	IssuedAtTick int64
+}
+
 type Project struct {
 	ID            string
 	Type          string
@@ -289,6 +300,7 @@ type Store struct {
 	Evidence     map[int64]*Evidence
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
+	Permits      map[string]*Permit
 	Projects     map[string]*Project
 	ActiveCrisis *Crisis
 
@@ -372,6 +384,7 @@ type StandingView struct {
 	CompletedToday  int
 	CompletedTotal  int
 	Rumors          int
+	PermitStatus    string
 }
 
 type EventView struct {
@@ -413,6 +426,7 @@ type SeatView struct {
 	CanToggleTaxLow     bool
 	CanTogglePermit     bool
 	CanToggleEmbargo    bool
+	CanIssuePermit      bool
 }
 
 type RumorView struct {
@@ -457,6 +471,12 @@ type ObligationView struct {
 	SettleLabel    string
 	SettleDisabled bool
 	CanForgive     bool
+}
+
+type PermitView struct {
+	PlayerName string
+	IssuerName string
+	TicksLeft  int
 }
 
 type ProjectView struct {
@@ -548,6 +568,7 @@ type PageData struct {
 	Evidence                []EvidenceView
 	Loans                   []LoanView
 	Obligations             []ObligationView
+	Permits                 []PermitView
 	Projects                []ProjectView
 	ProjectOptions          []ProjectOption
 	Crisis                  *CrisisView
@@ -995,6 +1016,7 @@ func newStore() *Store {
 		Evidence:          map[int64]*Evidence{},
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
+		Permits:           map[string]*Permit{},
 		Projects:          map[string]*Project{},
 		ActiveCrisis:      nil,
 		Events:            []Event{},
@@ -1042,6 +1064,7 @@ func resetStoreLocked(s *Store) {
 	s.Evidence = map[int64]*Evidence{}
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
+	s.Permits = map[string]*Permit{}
 	s.Projects = map[string]*Project{}
 	s.ActiveCrisis = nil
 	s.Events = []Event{}
@@ -1327,6 +1350,17 @@ func processInstitutionTickLocked(store *Store, now time.Time) {
 			addEventLocked(store, Event{Type: "Policy", Severity: 1, Text: "Smuggling embargo expires.", At: now})
 		}
 	}
+	for playerID, permit := range store.Permits {
+		if permit == nil {
+			delete(store.Permits, playerID)
+			continue
+		}
+		permit.TicksLeft--
+		if permit.TicksLeft <= 0 {
+			delete(store.Permits, playerID)
+			addEventLocked(store, Event{Type: "Policy", Severity: 1, Text: fmt.Sprintf("Permit for [%s] expires.", permit.PlayerName), At: now})
+		}
+	}
 	for _, seat := range store.Seats {
 		if seat.ElectionWindowTicks > 0 {
 			seat.ElectionWindowTicks--
@@ -1395,6 +1429,18 @@ func seatDefaultHolderName(seatID string) string {
 func playerHoldsSeatLocked(store *Store, playerID, seatID string) bool {
 	seat := store.Seats[seatID]
 	return seat != nil && seat.HolderPlayerID == playerID
+}
+
+func permitForPlayerLocked(store *Store, playerID string) *Permit {
+	permit := store.Permits[playerID]
+	if permit == nil || permit.TicksLeft <= 0 {
+		return nil
+	}
+	return permit
+}
+
+func hasActivePermitLocked(store *Store, playerID string) bool {
+	return permitForPlayerLocked(store, playerID) != nil
 }
 
 func processIntelTickLocked(store *Store, now time.Time) {
@@ -1924,7 +1970,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "Smuggling is under embargo.")
 			return
 		}
-		if c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+		if c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID) {
 			setToastLocked(store, p.ID, "Permit required for emergency contracts.")
 			return
 		}
@@ -2748,6 +2794,39 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] marks emergency permits as %s.", p.Name, state), At: now})
 		setToastLocked(store, p.ID, "Permit policy updated.")
+	case "issue_permit":
+		if !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			setToastLocked(store, p.ID, "Only the Harbor Master can issue permits.")
+			return
+		}
+		if !store.Policies.PermitRequiredHighRisk {
+			setToastLocked(store, p.ID, "Permits are currently open; no permit needed.")
+			return
+		}
+		target := store.Players[in.TargetID]
+		if target == nil {
+			setToastLocked(store, p.ID, "Select a valid permit recipient.")
+			return
+		}
+		if hasActivePermitLocked(store, target.ID) {
+			setToastLocked(store, p.ID, "That player already holds a permit.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		store.Permits[target.ID] = &Permit{
+			PlayerID:     target.ID,
+			PlayerName:   target.Name,
+			IssuerID:     p.ID,
+			IssuerName:   p.Name,
+			TicksLeft:    permitDurationTicks,
+			TotalTicks:   permitDurationTicks,
+			IssuedAtTick: store.TickCount,
+		}
+		addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] issues a permit to [%s].", p.Name, target.Name), At: now})
+		setToastLocked(store, p.ID, "Permit issued.")
 	case "toggle_embargo":
 		if !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
 			setToastLocked(store, p.ID, "Only the Harbor Master can set embargoes.")
@@ -3126,6 +3205,13 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	ensureTodayCounterLocked(p, now)
 	today := now.UTC().Format("2006-01-02")
+	highImpactRemaining := highImpactDailyCap
+	if store.DailyActionDate[playerID] == today {
+		highImpactRemaining = highImpactDailyCap - store.DailyHighImpactN[playerID]
+	}
+	if highImpactRemaining < 0 {
+		highImpactRemaining = 0
+	}
 
 	contractView := func(c *Contract) ContractView {
 		isBounty := c.Type == "Bounty"
@@ -3164,6 +3250,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		canAbandon := c.Status == "Accepted" && c.OwnerPlayerID == p.ID
 		canCancel := c.Status == "Issued" && c.IssuerPlayerID == p.ID
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
+		permitRequired := c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID)
+		if permitRequired {
+			canAccept = false
+		}
 
 		showOutcome := c.OwnerPlayerID == p.ID && (c.Status == "Accepted" || c.Status == "Fulfilled")
 		deliverDisabled := false
@@ -3218,23 +3308,30 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 				outcomeNote = fmt.Sprintf("Need %d sacks to deliver.", c.SupplySacks)
 			}
 		}
+		requirementNotes := []string{}
+		if permitRequired {
+			requirementNotes = append(requirementNotes, "Requirement: permit required for emergency contracts.")
+		}
 		if isBounty {
 			required := c.BountyEvidence
 			if required <= 0 {
 				required = bountyEvidenceMin
 			}
-			requirementNote = fmt.Sprintf("Requirement: evidence strength %d+ on target.", required)
+			requirementNotes = append(requirementNotes, fmt.Sprintf("Requirement: evidence strength %d+ on target.", required))
 			if c.BountyReward > 0 {
 				rewardNote = fmt.Sprintf("Reward: %dg.", c.BountyReward)
 			}
 		}
 		if isSupply {
 			if c.SupplySacks > 0 {
-				requirementNote = fmt.Sprintf("Requirement: deliver %d sacks.", c.SupplySacks)
+				requirementNotes = append(requirementNotes, fmt.Sprintf("Requirement: deliver %d sacks.", c.SupplySacks))
 			}
 			if c.RewardGold > 0 {
 				rewardNote = fmt.Sprintf("Reward: %dg escrowed.", c.RewardGold)
 			}
+		}
+		if len(requirementNotes) > 0 {
+			requirementNote = strings.Join(requirementNotes, " ")
 		}
 
 		deliverLabel := "Deliver"
@@ -3418,6 +3515,16 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		messages = messages[len(messages)-maxVisibleMessages:]
 	}
 
+	playerOptions := make([]PlayerOption, 0, len(store.Players))
+	for _, pp := range store.Players {
+		if pp.ID == p.ID {
+			continue
+		}
+		playerOptions = append(playerOptions, PlayerOption{ID: pp.ID, Name: pp.Name})
+	}
+	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
+	hasOtherPlayers := len(playerOptions) > 0
+
 	seatOrder := []string{"harbor_master", "master_of_coin", "high_curate"}
 	seats := make([]SeatView, 0, len(seatOrder))
 	for _, seatID := range seatOrder {
@@ -3429,6 +3536,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if inst := store.Institutions[seat.InstitutionID]; inst != nil {
 			instName = inst.Name
 		}
+		canIssuePermit := seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID && store.Policies.PermitRequiredHighRisk && hasOtherPlayers && highImpactRemaining > 0
 		seats = append(seats, SeatView{
 			ID:                  seat.ID,
 			Name:                seat.Name,
@@ -3443,18 +3551,9 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CanToggleTaxLow:     seat.ID == "master_of_coin" && seat.HolderPlayerID == p.ID && store.Policies.TaxRatePct != 5,
 			CanTogglePermit:     seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
 			CanToggleEmbargo:    seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
+			CanIssuePermit:      canIssuePermit,
 		})
 	}
-
-	playerOptions := make([]PlayerOption, 0, len(store.Players))
-	for _, pp := range store.Players {
-		if pp.ID == p.ID {
-			continue
-		}
-		playerOptions = append(playerOptions, PlayerOption{ID: pp.ID, Name: pp.Name})
-	}
-	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
-	hasOtherPlayers := len(playerOptions) > 0
 
 	if p.LocationID == "" {
 		p.LocationID = locationCapital
@@ -3600,6 +3699,24 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	sort.Slice(obligations, func(i, j int) bool { return obligations[i].ID > obligations[j].ID })
 
+	permits := make([]PermitView, 0, len(store.Permits))
+	for _, permit := range store.Permits {
+		if permit == nil || permit.TicksLeft <= 0 {
+			continue
+		}
+		permits = append(permits, PermitView{
+			PlayerName: permit.PlayerName,
+			IssuerName: permit.IssuerName,
+			TicksLeft:  permit.TicksLeft,
+		})
+	}
+	sort.Slice(permits, func(i, j int) bool { return permits[i].PlayerName < permits[j].PlayerName })
+
+	permitStatus := "None"
+	if permit := permitForPlayerLocked(store, p.ID); permit != nil {
+		permitStatus = fmt.Sprintf("Active (%dt)", permit.TicksLeft)
+	}
+
 	toast := ""
 	if consumeToast {
 		toast = popToastLocked(store, playerID)
@@ -3612,14 +3729,6 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		remaining = 0
 	}
 	tickStatus := fmt.Sprintf("Next tick in %ds · cadence %ds", int(remaining.Seconds()), int(store.TickEvery.Seconds()))
-
-	highImpactRemaining := highImpactDailyCap
-	if store.DailyActionDate[playerID] == today {
-		highImpactRemaining = highImpactDailyCap - store.DailyHighImpactN[playerID]
-	}
-	if highImpactRemaining < 0 {
-		highImpactRemaining = 0
-	}
 
 	investigateCooldown := 0
 	if lastTick, ok := store.LastInvestigateAt[p.ID]; ok {
@@ -3753,6 +3862,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CompletedToday:  p.CompletedContractsToday,
 			CompletedTotal:  p.CompletedContracts,
 			Rumors:          p.Rumors,
+			PermitStatus:    permitStatus,
 		},
 		World:                   store.World,
 		Situation:               store.World.Situation,
@@ -3790,6 +3900,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Evidence:                evidence,
 		Loans:                   loans,
 		Obligations:             obligations,
+		Permits:                 permits,
 		Projects:                projects,
 		ProjectOptions:          projectOptions,
 		Crisis:                  crisisView,

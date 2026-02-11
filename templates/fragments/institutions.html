@@ -37,8 +37,31 @@
         {{ if .CanToggleEmbargo }}
           <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">{{ if gt $.Policies.SmugglingEmbargoTicks 0 }}Lift Embargo{{ else }}Impose Embargo{{ end }}</button></form>
         {{ end }}
+        {{ if .CanIssuePermit }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="issue_permit">
+            <select name="target_id" aria-label="Permit recipient">
+              {{ range $.PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+            </select>
+            <button class="secondary" type="submit">Issue Permit ({{ $.HighImpactRemaining }}/{{ $.HighImpactCap }})</button>
+          </form>
+        {{ end }}
       </div>
     </div>
+  {{ end }}
+</div>
+<div class="muted" style="margin-top:10px;">Active Permits</div>
+<div class="contracts" style="margin-top:8px;">
+  {{ range .Permits }}
+    <div class="contract">
+      <div><strong>{{ .PlayerName }}</strong> <span class="pill">Permit</span></div>
+      <div class="meta">
+        <span>Issued by: {{ .IssuerName }}</span>
+        <span>Ticks left: {{ .TicksLeft }}</span>
+      </div>
+    </div>
+  {{ else }}
+    <div class="muted">No active permits.</div>
   {{ end }}
 </div>
 <div class="muted" style="margin-top:10px;">Public Works</div>

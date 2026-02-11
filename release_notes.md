@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.11.0
+- Added Harbor Master permits for emergency contracts, with tick-based expiry.
+- Institutions panel now lists active permits and allows issuing permits to other players.
+- Contract cards now surface permit requirements and disable acceptance when blocked.
+
 ## 0.10.0
 - Added travel between districts with per-player travel timers and arrival events.
 - New fieldwork actions in the frontier and ruins grant rewards or risk heat/rep.

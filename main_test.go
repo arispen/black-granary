@@ -125,6 +125,56 @@ func TestAcceptRulesAndSingleContractLimit(t *testing.T) {
 	}
 }
 
+func TestPermitAllowsEmergencyAcceptance(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+
+	harbor := &Player{ID: "p1", Name: "Harbor Master", Gold: 20, Rep: 30, LastSeen: now}
+	contractor := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[harbor.ID] = harbor
+	s.Players[contractor.ID] = contractor
+
+	seat := s.Seats["harbor_master"]
+	seat.HolderPlayerID = harbor.ID
+	seat.HolderName = harbor.Name
+	s.Policies.PermitRequiredHighRisk = true
+
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
+	handleActionLocked(s, contractor, now, "accept", "c1")
+	if s.Contracts["c1"].Status != "Issued" {
+		t.Fatalf("expected permit to block acceptance without issuance")
+	}
+
+	handleActionInputLocked(s, harbor, now.Add(time.Second), ActionInput{Action: "issue_permit", TargetID: contractor.ID})
+	if !hasActivePermitLocked(s, contractor.ID) {
+		t.Fatalf("expected permit to be issued")
+	}
+
+	handleActionLocked(s, contractor, now.Add(2*time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Accepted" || s.Contracts["c1"].OwnerPlayerID != contractor.ID {
+		t.Fatalf("expected emergency contract accepted with permit")
+	}
+}
+
+func TestPermitExpiresOnInstitutionTick(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	s.Permits[p.ID] = &Permit{
+		PlayerID:   p.ID,
+		PlayerName: p.Name,
+		IssuerName: "Harbor Master",
+		TicksLeft:  1,
+		TotalTicks: 1,
+	}
+	processInstitutionTickLocked(s, now)
+	if s.Permits[p.ID] != nil {
+		t.Fatalf("expected permit to expire on tick")
+	}
+}
+
 func TestInvestigateCooldownByTicks(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
