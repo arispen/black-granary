@@ -220,6 +220,59 @@ func TestDeliveryCompletionIncrementsImpactAndHeat(t *testing.T) {
 	}
 }
 
+func TestSupplyContractFlow(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+
+	issuer := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 30, Rep: 0, Grain: 0, LastSeen: now}
+	contractor := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 10, Rep: 0, Grain: 5, LastSeen: now}
+	s.Players[issuer.ID] = issuer
+	s.Players[contractor.ID] = contractor
+	s.World.UnrestValue = 20
+
+	handleActionInputLocked(s, issuer, now, ActionInput{Action: "post_supply", Sacks: 4, Reward: 12})
+
+	var contractID string
+	for id, c := range s.Contracts {
+		if c.Type == "Supply" {
+			contractID = id
+		}
+	}
+	if contractID == "" {
+		t.Fatalf("expected supply contract to be created")
+	}
+	c := s.Contracts[contractID]
+	if c.IssuerPlayerID != issuer.ID || c.RewardGold != 12 || c.SupplySacks != 4 {
+		t.Fatalf("unexpected supply contract fields: %+v", c)
+	}
+	if issuer.Gold != 18 {
+		t.Fatalf("issuer should escrow reward, gold=%d", issuer.Gold)
+	}
+
+	handleActionLocked(s, contractor, now.Add(2*time.Second), "accept", contractID)
+	if c.Status != "Accepted" || c.OwnerPlayerID != contractor.ID {
+		t.Fatalf("contract should be accepted by contractor, status=%s owner=%s", c.Status, c.OwnerPlayerID)
+	}
+
+	prevSupply := s.World.GrainSupply
+	handleActionLocked(s, contractor, now.Add(4*time.Second), "deliver", contractID)
+	if c.Status != "Completed" {
+		t.Fatalf("supply contract should complete, status=%s", c.Status)
+	}
+	if contractor.Gold != 22 {
+		t.Fatalf("contractor should receive reward, gold=%d", contractor.Gold)
+	}
+	if contractor.Grain != 1 {
+		t.Fatalf("contractor grain should be consumed, grain=%d", contractor.Grain)
+	}
+	if s.World.GrainSupply != prevSupply+4*grainUnitPerSack {
+		t.Fatalf("world grain supply should increase, got %d want %d", s.World.GrainSupply, prevSupply+4*grainUnitPerSack)
+	}
+	if issuer.Rep != 1 {
+		t.Fatalf("issuer should gain reputation, rep=%d", issuer.Rep)
+	}
+}
+
 func TestBountyDeliveryRequiresEvidence(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.5.0
+- Added player-posted supply contracts with escrowed rewards and sack requirements.
+- Supply contracts now show issuer, reward, and requirements, with issuer withdrawal available.
+- Supply deliveries consume stockpiled grain, ease unrest, and reward contractors.
+
 ## 0.4.0
 - Added law pressure with Wanted heat tiers and bounty contracts for high-heat players.
 - Bounty contracts require evidence delivery and penalize the target when resolved.

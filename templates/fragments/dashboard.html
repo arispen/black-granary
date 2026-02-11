@@ -90,6 +90,7 @@
         <div class="meta">
           <span>Deadline: {{ .DeadlineTicks }} ticks</span>
           <span>Taken by: {{ .OwnerName }}</span>
+          {{ if .IssuerName }}<span>Posted by: {{ .IssuerName }}</span>{{ end }}
           {{ if .TargetName }}<span>Target: {{ .TargetName }}</span>{{ end }}
           {{ if and (ne .OwnerName "-") (ne .Stance "") }}<span>Stance: {{ .Stance }}</span>{{ end }}
         </div>
@@ -99,12 +100,15 @@
         {{ if .RequirementNote }}
           <div class="contract-outcome">{{ .RequirementNote }}</div>
         {{ end }}
+        {{ if .RewardNote }}
+          <div class="contract-outcome">{{ .RewardNote }}</div>
+        {{ end }}
         <div class="actions">
           {{ if .CanAccept }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button,select">
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              {{ if not .IsBounty }}
+              {{ if and (not .IsBounty) (not .IsSupply) }}
                 <select name="stance" aria-label="Choose stance">
                   <option value="Careful" selected>Careful</option>
                   <option value="Fast">Fast</option>
@@ -128,6 +132,13 @@
               <button class="secondary" type="submit">Abandon</button>
             </form>
           {{ end }}
+          {{ if .CanCancel }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="cancel_contract">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button class="secondary" type="submit">Withdraw</button>
+            </form>
+          {{ end }}
           {{ if .CanDeliver }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="deliver">
@@ -145,6 +156,12 @@
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="investigate">
       <button type="submit" {{ if .InvestigateDisabled }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
+    </form>
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="post_supply">
+      <input type="number" name="sacks" min="2" max="10" value="4" style="width:70px;">
+      <input type="number" name="reward" min="6" max="60" value="12" style="width:70px;">
+      <button class="secondary" type="submit">Post Supply</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="petition_institution">
