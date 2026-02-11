@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.10.0
+- Added travel between districts with per-player travel timers and arrival events.
+- New fieldwork actions in the frontier and ruins grant rewards or risk heat/rep.
+- Dashboard now shows travel status and fieldwork availability, with improved institutions/intel hints.
+
 ## 0.9.0
 - Added citywide crisis events (plague, fire, collapse) that pressure unrest and grain supplies.
 - Crisis Watch shows active emergencies and lets players fund response actions.

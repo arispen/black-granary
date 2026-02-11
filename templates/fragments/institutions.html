@@ -1,6 +1,7 @@
 {{ define "institutions_inner" }}
 <h3>Institutions</h3>
 <div class="muted">Tax {{ .Policies.TaxRatePct }}% · Permit {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
+<div class="muted" style="margin-top:4px;">High impact remaining: {{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
 <div class="contracts" style="margin-top:8px;">
   {{ range .Seats }}
     <div class="contract">

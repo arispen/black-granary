@@ -942,3 +942,70 @@ func TestScenarioCreditDefaultSanctionEmbargoSmugglingResponse(t *testing.T) {
 		t.Fatalf("embargo should increase smuggling value response, with=%d without=%d", withEmbargo, noEmbargo)
 	}
 }
+
+func TestTravelProgressAndArrival(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 10, Rep: 0, LastSeen: now, LocationID: locationCapital}
+	s.Players[p.ID] = p
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "travel", LocationID: locationFrontier})
+
+	wantTicks := travelTicksBetween(locationCapital, locationFrontier)
+	if p.TravelTicksLeft != wantTicks {
+		t.Fatalf("travel ticks = %d, want %d", p.TravelTicksLeft, wantTicks)
+	}
+	if p.LocationID != locationCapital {
+		t.Fatalf("location should remain capital during travel, got %s", p.LocationID)
+	}
+
+	processTravelTickLocked(s, now)
+	if p.TravelTicksLeft != wantTicks-1 {
+		t.Fatalf("travel ticks after one tick = %d, want %d", p.TravelTicksLeft, wantTicks-1)
+	}
+
+	processTravelTickLocked(s, now)
+	if p.LocationID != locationFrontier {
+		t.Fatalf("expected arrival at frontier, got %s", p.LocationID)
+	}
+	if p.TravelTicksLeft != 0 || p.TravelToID != "" {
+		t.Fatalf("travel state should clear on arrival, left=%d to=%s", p.TravelTicksLeft, p.TravelToID)
+	}
+}
+
+func TestTravelBlocksActions(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 10, Rep: 0, LastSeen: now, LocationID: locationCapital}
+	s.Players[p.ID] = p
+	s.World.UnrestValue = 20
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "travel", LocationID: locationFrontier})
+	handleActionLocked(s, p, now, "investigate", "")
+
+	if s.World.UnrestValue != 20 {
+		t.Fatalf("investigate should be blocked while traveling, unrest=%d", s.World.UnrestValue)
+	}
+	if s.ToastByPlayer[p.ID] == "" {
+		t.Fatalf("expected toast when acting during travel")
+	}
+}
+
+func TestExploreRuinsAppliesOutcomeAndCooldown(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 5, Rep: 0, Heat: 0, LastSeen: now, LocationID: locationRuins}
+	s.Players[p.ID] = p
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "explore_ruins"})
+
+	if p.Gold != 4 {
+		t.Fatalf("expected supplies cost applied, gold=%d", p.Gold)
+	}
+	if p.Heat != 2 || p.Rep != -2 {
+		t.Fatalf("expected ruins mishap outcome, heat=%d rep=%d", p.Heat, p.Rep)
+	}
+	if _, ok := s.LastFieldworkAt[p.ID]; !ok {
+		t.Fatalf("expected fieldwork cooldown set")
+	}
+}

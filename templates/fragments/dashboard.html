@@ -41,6 +41,39 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
+  <h3>Travel & Fieldwork</h3>
+  <div><strong>Location</strong><br>{{ .LocationName }}</div>
+  <div class="muted" style="margin-top:6px;">{{ .LocationDescription }}</div>
+  {{ if .Traveling }}
+    <div class="muted" style="margin-top:6px;">En route to {{ .TravelDestination }} · {{ .TravelTicksLeft }} / {{ .TravelTotalTicks }} ticks left</div>
+  {{ else }}
+    {{ if gt (len .LocationOptions) 0 }}
+      <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:6px;">
+        <input type="hidden" name="action" value="travel">
+        <select name="location_id" aria-label="Destination">
+          {{ range .LocationOptions }}<option value="{{ .ID }}">{{ .Name }} ({{ .TravelTicks }}t)</option>{{ end }}
+        </select>
+        <button class="secondary" type="submit">Travel</button>
+      </form>
+    {{ else }}
+      <div class="muted" style="margin-top:6px;">No destinations available.</div>
+    {{ end }}
+  {{ end }}
+  <div class="muted" style="margin-top:8px;">Fieldwork</div>
+  {{ if .FieldworkAvailable }}
+    <div class="muted" style="margin-top:4px;">{{ .FieldworkDescription }}</div>
+    {{ if .FieldworkDisabledReason }}
+      <div class="muted" style="margin-top:4px;">{{ .FieldworkDisabledReason }}</div>
+    {{ end }}
+    <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="{{ .FieldworkAction }}">
+      <button class="secondary" type="submit" {{ if .FieldworkDisabled }}disabled{{ end }}>{{ .FieldworkLabel }} ({{ .FieldworkSupplyCost }}g)</button>
+    </form>
+  {{ else }}
+    <div class="muted" style="margin-top:4px;">No fieldwork available at this location.</div>
+  {{ end }}
+</div>
+<div class="card" style="margin-top:12px;">
   <h3>Institutions and Offices</h3>
   <div class="muted">Tax: {{ .Policies.TaxRatePct }}% · Permit: {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo: {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
   <div class="contracts" style="margin-top:8px;">

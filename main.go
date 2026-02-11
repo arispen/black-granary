@@ -58,6 +58,12 @@ const (
 	projectMaxActive            = 4
 	messageSubjectMax           = 80
 	messageBodyMax              = 260
+	fieldworkCooldownTicks      = 2
+	fieldworkSupplyCost         = 1
+	locationCapital             = "capital"
+	locationHarbor              = "harbor"
+	locationFrontier            = "frontier"
+	locationRuins               = "ruins"
 )
 
 type WorldState struct {
@@ -85,6 +91,10 @@ type Player struct {
 	CompletedContractsToday int
 	CompletedTodayDateUTC   string
 	RiteImmunityTicks       int
+	LocationID              string
+	TravelToID              string
+	TravelTicksLeft         int
+	TravelTotalTicks        int
 	LastSeen                time.Time
 }
 
@@ -260,6 +270,12 @@ type CrisisDefinition struct {
 	FailureGrainDelta  int
 }
 
+type LocationDef struct {
+	ID          string
+	Name        string
+	Description string
+}
+
 type Store struct {
 	mu sync.Mutex
 
@@ -302,6 +318,7 @@ type Store struct {
 	LastInvestigateAt map[string]int64
 	LastSeatActionAt  map[string]int64
 	LastIntelActionAt map[string]int64
+	LastFieldworkAt   map[string]int64
 	DailyActionDate   map[string]string
 	DailyHighImpactN  map[string]int
 	ToastByPlayer     map[string]string
@@ -478,56 +495,78 @@ type PlayerOption struct {
 	Name string
 }
 
+type LocationOption struct {
+	ID          string
+	Name        string
+	TravelTicks int
+	Disabled    bool
+	Reason      string
+}
+
 type PageData struct {
-	NowUTC               string
-	Player               *Player
-	PlayerTitle          string
-	Standing             StandingView
-	World                WorldState
-	Situation            string
-	HighImpactRemaining  int
-	HighImpactCap        int
-	InvestigateDisabled  bool
-	InvestigateLabel     string
-	MarketBasePrice      int
-	MarketBuyPrice       int
-	MarketSellPrice      int
-	MarketSupplySacks    int
-	MarketControlsTicks  int
-	MarketControlsActive bool
-	MarketStockpile      int
-	MarketMaxBuy         int
-	MarketMaxSell        int
-	MarketBuyDisabled    bool
-	MarketSellDisabled   bool
-	ReliefCost           int
-	ReliefDisabled       bool
-	ReliefLabel          string
-	HasOtherPlayers      bool
-	Contracts            []ContractView
-	Events               []EventView
-	Players              []PlayerSummary
-	Chat                 []ChatView
-	ChatDraft            string
-	Messages             []MessageView
-	MessageDraftSubject  string
-	MessageDraftBody     string
-	MessageDraftTargetID string
-	Toast                string
-	AcceptedCount        int
-	VisibleContractN     int
-	TotalContractN       int
-	Seats                []SeatView
-	Policies             PolicyState
-	Rumors               []RumorView
-	Evidence             []EvidenceView
-	Loans                []LoanView
-	Obligations          []ObligationView
-	Projects             []ProjectView
-	ProjectOptions       []ProjectOption
-	Crisis               *CrisisView
-	PlayerOptions        []PlayerOption
-	TickStatus           string
+	NowUTC                  string
+	Player                  *Player
+	PlayerTitle             string
+	Standing                StandingView
+	World                   WorldState
+	Situation               string
+	HighImpactRemaining     int
+	HighImpactCap           int
+	InvestigateDisabled     bool
+	InvestigateLabel        string
+	MarketBasePrice         int
+	MarketBuyPrice          int
+	MarketSellPrice         int
+	MarketSupplySacks       int
+	MarketControlsTicks     int
+	MarketControlsActive    bool
+	MarketStockpile         int
+	MarketMaxBuy            int
+	MarketMaxSell           int
+	MarketBuyDisabled       bool
+	MarketSellDisabled      bool
+	ReliefCost              int
+	ReliefDisabled          bool
+	ReliefLabel             string
+	HasOtherPlayers         bool
+	Contracts               []ContractView
+	Events                  []EventView
+	Players                 []PlayerSummary
+	Chat                    []ChatView
+	ChatDraft               string
+	Messages                []MessageView
+	MessageDraftSubject     string
+	MessageDraftBody        string
+	MessageDraftTargetID    string
+	Toast                   string
+	AcceptedCount           int
+	VisibleContractN        int
+	TotalContractN          int
+	Seats                   []SeatView
+	Policies                PolicyState
+	Rumors                  []RumorView
+	Evidence                []EvidenceView
+	Loans                   []LoanView
+	Obligations             []ObligationView
+	Projects                []ProjectView
+	ProjectOptions          []ProjectOption
+	Crisis                  *CrisisView
+	PlayerOptions           []PlayerOption
+	LocationName            string
+	LocationDescription     string
+	Traveling               bool
+	TravelDestination       string
+	TravelTicksLeft         int
+	TravelTotalTicks        int
+	LocationOptions         []LocationOption
+	FieldworkAvailable      bool
+	FieldworkAction         string
+	FieldworkLabel          string
+	FieldworkDescription    string
+	FieldworkDisabled       bool
+	FieldworkDisabledReason string
+	FieldworkSupplyCost     int
+	TickStatus              string
 }
 
 const (
@@ -727,6 +766,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			LoanID:       strings.TrimSpace(r.FormValue("loan_id")),
 			ObligationID: strings.TrimSpace(r.FormValue("obligation_id")),
 			ProjectType:  strings.TrimSpace(r.FormValue("project_type")),
+			LocationID:   strings.TrimSpace(r.FormValue("location_id")),
 		}
 		if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("amount"))); err == nil {
 			input.Amount = n
@@ -970,6 +1010,7 @@ func newStore() *Store {
 		LastInvestigateAt: map[string]int64{},
 		LastSeatActionAt:  map[string]int64{},
 		LastIntelActionAt: map[string]int64{},
+		LastFieldworkAt:   map[string]int64{},
 		DailyActionDate:   map[string]string{},
 		DailyHighImpactN:  map[string]int{},
 		ToastByPlayer:     map[string]string{},
@@ -1021,6 +1062,7 @@ func resetStoreLocked(s *Store) {
 	s.LastInvestigateAt = map[string]int64{}
 	s.LastSeatActionAt = map[string]int64{}
 	s.LastIntelActionAt = map[string]int64{}
+	s.LastFieldworkAt = map[string]int64{}
 	s.DailyActionDate = map[string]string{}
 	s.DailyHighImpactN = map[string]int{}
 	s.ToastByPlayer = map[string]string{}
@@ -1053,6 +1095,7 @@ func runWorldTickLocked(store *Store, now time.Time) {
 	processFinanceTickLocked(store, now)
 	processProjectTickLocked(store, now)
 	processPlayerTickLocked(store)
+	processTravelTickLocked(store, now)
 	w := &store.World
 	prevGrainTier := w.GrainTier
 	prevUnrestTier := w.UnrestTier
@@ -1572,6 +1615,91 @@ func processPlayerTickLocked(store *Store) {
 	}
 }
 
+func processTravelTickLocked(store *Store, now time.Time) {
+	for _, p := range store.Players {
+		if p.TravelTicksLeft <= 0 {
+			continue
+		}
+		p.TravelTicksLeft--
+		if p.TravelTicksLeft > 0 {
+			continue
+		}
+		destID := p.TravelToID
+		p.LocationID = destID
+		p.TravelToID = ""
+		p.TravelTotalTicks = 0
+		destName := locationName(destID)
+		addEventLocked(store, Event{
+			Type:     "Travel",
+			Severity: 1,
+			Text:     fmt.Sprintf("[%s] arrives at %s.", p.Name, destName),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("Arrived at %s.", destName))
+	}
+}
+
+func fieldworkCooldownRemaining(store *Store, playerID string) int {
+	lastTick, ok := store.LastFieldworkAt[playerID]
+	if !ok {
+		return 0
+	}
+	diff := int(store.TickCount - lastTick)
+	if diff < fieldworkCooldownTicks {
+		return fieldworkCooldownTicks - diff
+	}
+	return 0
+}
+
+func locationDefinitions() []LocationDef {
+	return []LocationDef{
+		{ID: locationCapital, Name: "Black Granary (Capital)", Description: "The granary citadel and its surrounding markets."},
+		{ID: locationHarbor, Name: "Harbor Ward", Description: "Salt air, cargo manifests, and merchant seals."},
+		{ID: locationFrontier, Name: "Frontier Village", Description: "Wind-scoured outpost clinging to the trade road."},
+		{ID: locationRuins, Name: "Haunted Ruins", Description: "A broken keep where relics and rumors linger."},
+	}
+}
+
+func locationByID(id string) (LocationDef, bool) {
+	for _, def := range locationDefinitions() {
+		if def.ID == id {
+			return def, true
+		}
+	}
+	return LocationDef{}, false
+}
+
+func locationName(id string) string {
+	if def, ok := locationByID(id); ok {
+		return def.Name
+	}
+	return "Unknown"
+}
+
+func travelTicksBetween(from, to string) int {
+	if from == "" || to == "" || from == to {
+		return 0
+	}
+	travel := map[string]int{
+		locationCapital + ":" + locationHarbor:   1,
+		locationHarbor + ":" + locationCapital:   1,
+		locationCapital + ":" + locationFrontier: 2,
+		locationFrontier + ":" + locationCapital: 2,
+		locationHarbor + ":" + locationFrontier:  2,
+		locationFrontier + ":" + locationHarbor:  2,
+		locationFrontier + ":" + locationRuins:   2,
+		locationRuins + ":" + locationFrontier:   2,
+		locationCapital + ":" + locationRuins:    3,
+		locationRuins + ":" + locationCapital:    3,
+		locationHarbor + ":" + locationRuins:     3,
+		locationRuins + ":" + locationHarbor:     3,
+	}
+	if ticks, ok := travel[from+":"+to]; ok {
+		return ticks
+	}
+	return 2
+}
+
 func addRumorLocked(store *Store, r *Rumor, now time.Time) {
 	store.NextRumorID++
 	r.ID = store.NextRumorID
@@ -1737,6 +1865,7 @@ type ActionInput struct {
 	LoanID       string
 	ObligationID string
 	ProjectType  string
+	LocationID   string
 	Amount       int
 	Sacks        int
 	Reward       int
@@ -1761,6 +1890,10 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 
 	// Actions mutate local/player/contract state but never advance world time.
 	// Time progression is owned by fixed scheduler ticks for fair multi-player simulation.
+	if p.TravelTicksLeft > 0 && action != "travel" {
+		setToastLocked(store, p.ID, fmt.Sprintf("You are en route to %s.", locationName(p.TravelToID)))
+		return
+	}
 	switch action {
 	case "accept":
 		if c == nil {
@@ -2305,6 +2438,102 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		} else {
 			setToastLocked(store, p.ID, "No contract available to broker.")
 		}
+	case "travel":
+		if p.TravelTicksLeft > 0 {
+			setToastLocked(store, p.ID, "You are already on the road.")
+			return
+		}
+		targetID := strings.TrimSpace(in.LocationID)
+		if targetID == "" {
+			setToastLocked(store, p.ID, "Choose a destination.")
+			return
+		}
+		if targetID == p.LocationID {
+			setToastLocked(store, p.ID, "You are already there.")
+			return
+		}
+		if _, ok := locationByID(targetID); !ok {
+			setToastLocked(store, p.ID, "Unknown destination.")
+			return
+		}
+		ticks := travelTicksBetween(p.LocationID, targetID)
+		if ticks <= 0 {
+			setToastLocked(store, p.ID, "No travel needed.")
+			return
+		}
+		p.TravelToID = targetID
+		p.TravelTicksLeft = ticks
+		p.TravelTotalTicks = ticks
+		addEventLocked(store, Event{
+			Type:     "Travel",
+			Severity: 1,
+			Text:     fmt.Sprintf("[%s] departs for %s.", p.Name, locationName(targetID)),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("You depart for %s (%dt).", locationName(targetID), ticks))
+	case "scavenge_frontier":
+		if p.LocationID != locationFrontier {
+			setToastLocked(store, p.ID, "Travel to the Frontier Village to scavenge.")
+			return
+		}
+		if remaining := fieldworkCooldownRemaining(store, p.ID); remaining > 0 {
+			setToastLocked(store, p.ID, fmt.Sprintf("Fieldwork cooldown: %dt.", remaining))
+			return
+		}
+		if p.Gold < fieldworkSupplyCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg for supplies.", fieldworkSupplyCost))
+			return
+		}
+		p.Gold -= fieldworkSupplyCost
+		store.LastFieldworkAt[p.ID] = store.TickCount
+		roll := store.rng.Intn(100)
+		switch {
+		case roll < 60:
+			p.Grain += 2
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 1, Text: fmt.Sprintf("[%s] scavenges 2 sacks from the frontier.", p.Name), At: now})
+			setToastLocked(store, p.ID, "You return with 2 sacks.")
+		case roll < 85:
+			p.Gold += 3
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 1, Text: fmt.Sprintf("[%s] sells salvaged supplies in the frontier.", p.Name), At: now})
+			setToastLocked(store, p.ID, "You barter for 3g.")
+		default:
+			p.Heat = clampInt(p.Heat+1, 0, 20)
+			p.Rep = clampInt(p.Rep-1, -100, 100)
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 2, Text: fmt.Sprintf("[%s] returns from the frontier under suspicion.", p.Name), At: now})
+			setToastLocked(store, p.ID, "Watch patrols notice your movements.")
+		}
+	case "explore_ruins":
+		if p.LocationID != locationRuins {
+			setToastLocked(store, p.ID, "Travel to the Haunted Ruins to explore.")
+			return
+		}
+		if remaining := fieldworkCooldownRemaining(store, p.ID); remaining > 0 {
+			setToastLocked(store, p.ID, fmt.Sprintf("Fieldwork cooldown: %dt.", remaining))
+			return
+		}
+		if p.Gold < fieldworkSupplyCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg for supplies.", fieldworkSupplyCost))
+			return
+		}
+		p.Gold -= fieldworkSupplyCost
+		store.LastFieldworkAt[p.ID] = store.TickCount
+		roll := store.rng.Intn(100)
+		switch {
+		case roll < 45:
+			p.Gold += 6
+			p.Rep = clampInt(p.Rep+1, -100, 100)
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 2, Text: fmt.Sprintf("[%s] recovers relics from the ruins.", p.Name), At: now})
+			setToastLocked(store, p.ID, "Relics fetched: +6g.")
+		case roll < 75:
+			p.Rumors += 1
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 1, Text: fmt.Sprintf("[%s] unearths whispers in the ruins.", p.Name), At: now})
+			setToastLocked(store, p.ID, "Ruins rumors spread: +1 rumor.")
+		default:
+			p.Heat = clampInt(p.Heat+2, 0, 20)
+			p.Rep = clampInt(p.Rep-2, -100, 100)
+			addEventLocked(store, Event{Type: "Fieldwork", Severity: 3, Text: fmt.Sprintf("[%s] flees a hostile presence in the ruins.", p.Name), At: now})
+			setToastLocked(store, p.ID, "You escape, but the city hears of it.")
+		}
 	case "launch_project":
 		def, ok := projectDefinitionByType(in.ProjectType)
 		if !ok {
@@ -2654,6 +2883,9 @@ func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *P
 		store.Players[pid] = p
 		setToastLocked(store, pid, fmt.Sprintf("You arrive as %s.", p.Name))
 		addEventLocked(store, Event{Type: "Join", Severity: 1, Text: fmt.Sprintf("[%s] enters the city under a borrowed name.", p.Name), At: time.Now().UTC()})
+	}
+	if p.LocationID == "" {
+		p.LocationID = locationCapital
 	}
 	return p
 }
@@ -3224,6 +3456,66 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
 	hasOtherPlayers := len(playerOptions) > 0
 
+	if p.LocationID == "" {
+		p.LocationID = locationCapital
+	}
+	locationDef, _ := locationByID(p.LocationID)
+	traveling := p.TravelTicksLeft > 0
+	travelDestination := ""
+	if traveling {
+		travelDestination = locationName(p.TravelToID)
+	}
+	locationOptions := make([]LocationOption, 0, len(locationDefinitions()))
+	for _, def := range locationDefinitions() {
+		if def.ID == p.LocationID {
+			continue
+		}
+		disabled := traveling
+		reason := ""
+		if disabled {
+			reason = "Travel in progress."
+		}
+		locationOptions = append(locationOptions, LocationOption{
+			ID:          def.ID,
+			Name:        def.Name,
+			TravelTicks: travelTicksBetween(p.LocationID, def.ID),
+			Disabled:    disabled,
+			Reason:      reason,
+		})
+	}
+
+	fieldworkAvailable := false
+	fieldworkAction := ""
+	fieldworkLabel := ""
+	fieldworkDescription := ""
+	fieldworkDisabled := false
+	fieldworkDisabledReason := ""
+	if traveling {
+		fieldworkDisabled = true
+		fieldworkDisabledReason = "Traveling."
+	}
+	switch p.LocationID {
+	case locationFrontier:
+		fieldworkAvailable = true
+		fieldworkAction = "scavenge_frontier"
+		fieldworkLabel = "Scavenge Hinterlands"
+		fieldworkDescription = "Search the frontier for surplus sacks or salvage."
+	case locationRuins:
+		fieldworkAvailable = true
+		fieldworkAction = "explore_ruins"
+		fieldworkLabel = "Explore Ruins"
+		fieldworkDescription = "Probe the ruins for relics, rumors, or danger."
+	}
+	if fieldworkAvailable && !fieldworkDisabled {
+		if remaining := fieldworkCooldownRemaining(store, p.ID); remaining > 0 {
+			fieldworkDisabled = true
+			fieldworkDisabledReason = fmt.Sprintf("Fieldwork cooldown: %dt.", remaining)
+		} else if p.Gold < fieldworkSupplyCost {
+			fieldworkDisabled = true
+			fieldworkDisabledReason = fmt.Sprintf("Need %dg for supplies.", fieldworkSupplyCost)
+		}
+	}
+
 	rumors := make([]RumorView, 0, len(store.Rumors))
 	for _, r := range store.Rumors {
 		rumors = append(rumors, RumorView{
@@ -3462,47 +3754,61 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CompletedTotal:  p.CompletedContracts,
 			Rumors:          p.Rumors,
 		},
-		World:                store.World,
-		Situation:            store.World.Situation,
-		HighImpactRemaining:  highImpactRemaining,
-		HighImpactCap:        highImpactDailyCap,
-		InvestigateDisabled:  investigateDisabled,
-		InvestigateLabel:     investigateLabel,
-		MarketBasePrice:      marketBase,
-		MarketBuyPrice:       marketBuy,
-		MarketSellPrice:      marketSell,
-		MarketSupplySacks:    marketSupplySacks,
-		MarketControlsTicks:  store.World.RestrictedMarketsTicks,
-		MarketControlsActive: store.World.RestrictedMarketsTicks > 0,
-		MarketStockpile:      p.Grain,
-		MarketMaxBuy:         marketMaxBuy,
-		MarketMaxSell:        marketMaxSell,
-		MarketBuyDisabled:    marketBuyDisabled,
-		MarketSellDisabled:   marketSellDisabled,
-		ReliefCost:           reliefSackCost,
-		ReliefDisabled:       reliefDisabled,
-		ReliefLabel:          reliefLabel,
-		HasOtherPlayers:      hasOtherPlayers,
-		Contracts:            contracts,
-		Events:               events,
-		Players:              players,
-		Chat:                 chat,
-		Messages:             messages,
-		Toast:                toast,
-		AcceptedCount:        playerAcceptedCountLocked(store, playerID),
-		VisibleContractN:     len(contracts),
-		TotalContractN:       totalContractN,
-		Seats:                seats,
-		Policies:             store.Policies,
-		Rumors:               rumors,
-		Evidence:             evidence,
-		Loans:                loans,
-		Obligations:          obligations,
-		Projects:             projects,
-		ProjectOptions:       projectOptions,
-		Crisis:               crisisView,
-		PlayerOptions:        playerOptions,
-		TickStatus:           tickStatus,
+		World:                   store.World,
+		Situation:               store.World.Situation,
+		HighImpactRemaining:     highImpactRemaining,
+		HighImpactCap:           highImpactDailyCap,
+		InvestigateDisabled:     investigateDisabled,
+		InvestigateLabel:        investigateLabel,
+		MarketBasePrice:         marketBase,
+		MarketBuyPrice:          marketBuy,
+		MarketSellPrice:         marketSell,
+		MarketSupplySacks:       marketSupplySacks,
+		MarketControlsTicks:     store.World.RestrictedMarketsTicks,
+		MarketControlsActive:    store.World.RestrictedMarketsTicks > 0,
+		MarketStockpile:         p.Grain,
+		MarketMaxBuy:            marketMaxBuy,
+		MarketMaxSell:           marketMaxSell,
+		MarketBuyDisabled:       marketBuyDisabled,
+		MarketSellDisabled:      marketSellDisabled,
+		ReliefCost:              reliefSackCost,
+		ReliefDisabled:          reliefDisabled,
+		ReliefLabel:             reliefLabel,
+		HasOtherPlayers:         hasOtherPlayers,
+		Contracts:               contracts,
+		Events:                  events,
+		Players:                 players,
+		Chat:                    chat,
+		Messages:                messages,
+		Toast:                   toast,
+		AcceptedCount:           playerAcceptedCountLocked(store, playerID),
+		VisibleContractN:        len(contracts),
+		TotalContractN:          totalContractN,
+		Seats:                   seats,
+		Policies:                store.Policies,
+		Rumors:                  rumors,
+		Evidence:                evidence,
+		Loans:                   loans,
+		Obligations:             obligations,
+		Projects:                projects,
+		ProjectOptions:          projectOptions,
+		Crisis:                  crisisView,
+		PlayerOptions:           playerOptions,
+		LocationName:            locationDef.Name,
+		LocationDescription:     locationDef.Description,
+		Traveling:               traveling,
+		TravelDestination:       travelDestination,
+		TravelTicksLeft:         p.TravelTicksLeft,
+		TravelTotalTicks:        p.TravelTotalTicks,
+		LocationOptions:         locationOptions,
+		FieldworkAvailable:      fieldworkAvailable,
+		FieldworkAction:         fieldworkAction,
+		FieldworkLabel:          fieldworkLabel,
+		FieldworkDescription:    fieldworkDescription,
+		FieldworkDisabled:       fieldworkDisabled,
+		FieldworkDisabledReason: fieldworkDisabledReason,
+		FieldworkSupplyCost:     fieldworkSupplyCost,
+		TickStatus:              tickStatus,
 	}
 }
 
