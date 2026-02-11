@@ -129,19 +129,44 @@ func TestInvestigateCooldownByTicks(t *testing.T) {
 	s.World.UnrestValue = 20
 
 	handleActionLocked(s, p, now, "investigate", "")
-	if s.World.UnrestValue != 15 || p.Rep != 1 {
-		t.Fatalf("first investigate should be effective, unrest=%d rep=%d", s.World.UnrestValue, p.Rep)
+	if s.World.UnrestValue != 15 || p.Rep != 1 || p.Rumors != 1 {
+		t.Fatalf("first investigate should be effective, unrest=%d rep=%d rumors=%d", s.World.UnrestValue, p.Rep, p.Rumors)
 	}
 
 	handleActionLocked(s, p, now.Add(3*time.Second), "investigate", "")
-	if s.World.UnrestValue != 15 || p.Rep != 1 {
+	if s.World.UnrestValue != 15 || p.Rep != 1 || p.Rumors != 1 {
 		t.Fatalf("second investigate in same tick window should be flavor only")
 	}
 
 	s.TickCount += 3
 	handleActionLocked(s, p, now.Add(6*time.Second), "investigate", "")
-	if s.World.UnrestValue != 10 || p.Rep != 2 {
-		t.Fatalf("investigate after 3 ticks should be effective again, unrest=%d rep=%d", s.World.UnrestValue, p.Rep)
+	if s.World.UnrestValue != 10 || p.Rep != 2 || p.Rumors != 2 {
+		t.Fatalf("investigate after 3 ticks should be effective again, unrest=%d rep=%d rumors=%d", s.World.UnrestValue, p.Rep, p.Rumors)
+	}
+}
+
+func TestWhisperSuccessIncrementsRumors(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p1 := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	p2 := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p1.ID] = p1
+	s.Players[p2.ID] = p2
+
+	ok := handleChatLocked(s, p1, now, "/w Bran route clear")
+	if !ok {
+		t.Fatalf("expected whisper to succeed")
+	}
+	if p1.Rumors != 1 {
+		t.Fatalf("successful whisper should grant rumors, got %d", p1.Rumors)
+	}
+
+	ok = handleChatLocked(s, p1, now.Add(time.Second), "/w Nobody route clear")
+	if ok {
+		t.Fatalf("unknown whisper target should fail")
+	}
+	if p1.Rumors != 1 {
+		t.Fatalf("failed whisper should not grant rumors, got %d", p1.Rumors)
 	}
 }
 
@@ -185,6 +210,25 @@ func TestDeliveryCompletionIncrementsImpactAndHeat(t *testing.T) {
 	}
 	if p.CompletedContractsToday != 0 {
 		t.Fatalf("today counter should reset on UTC date change, got %d", p.CompletedContractsToday)
+	}
+}
+
+func TestDeliverConsumesRumorAndAppliesBonus(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, Rumors: 1, LastSeen: now}
+	s.Players[p.ID] = p
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Fulfilled", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
+
+	base := computeDeliverOutcomeLocked(&Player{Rep: 0, Rumors: 0}, s.Contracts["c1"])
+	withRumor := computeDeliverOutcomeLocked(p, s.Contracts["c1"])
+	if withRumor.RewardGold != base.RewardGold+rumorDeliverBonusGold {
+		t.Fatalf("rumor bonus should add %d gold, base=%d withRumor=%d", rumorDeliverBonusGold, base.RewardGold, withRumor.RewardGold)
+	}
+
+	handleActionLocked(s, p, now, "deliver", "c1")
+	if p.Rumors != 0 {
+		t.Fatalf("successful delivery should consume one rumor, got %d", p.Rumors)
 	}
 }
 

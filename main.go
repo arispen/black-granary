@@ -19,19 +19,22 @@ import (
 )
 
 const (
-	cookieName          = "pid"
-	maxEvents           = 300
-	maxChat             = 200
-	maxVisibleContracts = 12
-	onlineWindow        = 60 * time.Second
-	inactiveWindow      = 120 * time.Second
-	actionCooldown      = 2 * time.Second
-	deliverCooldown     = 10 * time.Second
-	chatCooldown        = 2 * time.Second
-	adminToken          = "DEV"
-	serverAddr          = ":8080"
-	templateRoot        = "templates"
-	initialPlayerGold   = 20
+	cookieName            = "pid"
+	maxEvents             = 300
+	maxChat               = 200
+	maxVisibleContracts   = 12
+	onlineWindow          = 60 * time.Second
+	inactiveWindow        = 120 * time.Second
+	actionCooldown        = 2 * time.Second
+	deliverCooldown       = 10 * time.Second
+	chatCooldown          = 2 * time.Second
+	adminToken            = "DEV"
+	serverAddr            = ":8080"
+	templateRoot          = "templates"
+	initialPlayerGold     = 20
+	rumorInvestigateGain  = 1
+	rumorWhisperGain      = 1
+	rumorDeliverBonusGold = 3
 )
 
 type WorldState struct {
@@ -769,6 +772,7 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 			store.World.UnrestValue = clampInt(store.World.UnrestValue-5, 0, 100)
 			store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
 			p.Rep = clampInt(p.Rep+1, -100, 100)
+			p.Rumors += rumorInvestigateGain
 			addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] investigates rumors along the supply routes.", p.Name), At: now})
 			setToastLocked(store, p.ID, "Your investigation calmed the streets.")
 		} else {
@@ -796,6 +800,7 @@ func handleChatLocked(store *Store, p *Player, now time.Time, msg string) bool {
 			return false
 		}
 		addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: p.Name, ToPlayerID: target.ID, ToName: target.Name, Text: body, At: now, Kind: "whisper"})
+		p.Rumors += rumorWhisperGain
 		return true
 	}
 	addChatLocked(store, ChatMessage{FromPlayerID: p.ID, FromName: p.Name, Text: msg, At: now, Kind: "global"})
@@ -835,6 +840,9 @@ func finalizeDeliveredContractLocked(store *Store, p *Player, c *Contract, now t
 	p.Gold += outcome.RewardGold
 	p.Rep = clampInt(p.Rep+outcome.RepDelta, -100, 100)
 	p.Heat = maxInt(0, p.Heat+outcome.HeatDelta)
+	if p.Rumors > 0 {
+		p.Rumors--
+	}
 	incrementCompletedCountersLocked(p, now)
 	addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: stanceEventText(outcome.Stance), At: now})
 }
@@ -1501,6 +1509,9 @@ func computeDeliverOutcomeLocked(p *Player, c *Contract) DeliverOutcome {
 	}
 	if c != nil && c.Type == "Smuggling" {
 		heatDelta++
+	}
+	if p != nil && p.Rumors > 0 {
+		reward += rumorDeliverBonusGold
 	}
 	return DeliverOutcome{
 		RewardGold: reward,
