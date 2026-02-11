@@ -1,8 +1,5 @@
 {{ define "index" }}
-<header class="header">
-  <h1>Black Granary</h1>
-  <div class="muted">Shared test realm. Day {{ .World.DayNumber }} · {{ .World.Subphase }} · You are {{ .Player.Name }}</div>
-</header>
+{{ template "header" . }}
   <div class="layout">
   <div>
     <div id="dashboard"
@@ -35,7 +32,7 @@
       hx-swap="innerHTML">
       {{ template "players_inner" . }}
     </div>
-    <div id="toast" class="toast">{{ if .Toast }}{{ .Toast }}{{ else }}&nbsp;{{ end }}</div>
+    <div id="toast" class="toast">{{ .Toast }}</div>
   </div>
 </div>
 {{ end }}

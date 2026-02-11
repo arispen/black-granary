@@ -8,9 +8,20 @@
     <div class="card"><strong>You</strong><br>{{ .Player.Gold }}g · {{ .PlayerTitle }}</div>
   </div>
 </div>
+<div class="card">
+  <h3>Your Standing in Black Granary</h3>
+  <div class="status-grid">
+    <div class="card"><strong>Reputation</strong><br>{{ .Standing.ReputationValue }} · {{ .Standing.ReputationLabel }}</div>
+    <div class="card"><strong>Heat</strong><br>{{ .Standing.HeatValue }} · {{ .Standing.HeatLabel }}</div>
+    <div class="card"><strong>Wealth</strong><br>{{ .Standing.WealthGold }}g</div>
+    <div class="card"><strong>Impact</strong><br>Today {{ .Standing.CompletedToday }}</div>
+    <div class="card"><strong>Impact</strong><br>Lifetime {{ .Standing.CompletedTotal }}</div>
+    <div class="card"><strong>Rumors</strong><br>{{ .Standing.Rumors }}</div>
+  </div>
+</div>
 <div class="card" style="margin-top:12px;">
   <h3>Contracts</h3>
-  <div class="muted">Accepted by you: {{ .AcceptedCount }} · Visible: {{ .VisibleContractN }}</div>
+  <div class="muted">Accepted by you: {{ .AcceptedCount }} · Showing: {{ .VisibleContractN }} / {{ .TotalContractN }}</div>
   <div class="contracts" style="margin-top:8px;">
     {{ range .Contracts }}
       <div class="contract {{ .UrgencyClass }}">
@@ -18,28 +29,42 @@
         <div class="meta">
           <span>Deadline: {{ .DeadlineTicks }} ticks</span>
           <span>Taken by: {{ .OwnerName }}</span>
+          {{ if ne .OwnerName "-" }}<span>Stance: {{ .Stance }}</span>{{ end }}
         </div>
         <div class="actions">
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
-            <input type="hidden" name="action" value="accept">
-            <input type="hidden" name="contract_id" value="{{ .ID }}">
-            <button type="submit">Accept</button>
-          </form>
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
-            <input type="hidden" name="action" value="ignore">
-            <input type="hidden" name="contract_id" value="{{ .ID }}">
-            <button class="secondary" type="submit">Ignore</button>
-          </form>
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
-            <input type="hidden" name="action" value="abandon">
-            <input type="hidden" name="contract_id" value="{{ .ID }}">
-            <button class="secondary" type="submit">Abandon</button>
-          </form>
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
-            <input type="hidden" name="action" value="deliver">
-            <input type="hidden" name="contract_id" value="{{ .ID }}">
-            <button class="warn" type="submit">Deliver (-2g)</button>
-          </form>
+          {{ if .CanAccept }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button,select">
+              <input type="hidden" name="action" value="accept">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <select name="stance" aria-label="Choose stance">
+                <option value="Careful" selected>Careful</option>
+                <option value="Fast">Fast</option>
+                <option value="Quiet">Quiet</option>
+              </select>
+              <button type="submit">Accept</button>
+            </form>
+          {{ end }}
+          {{ if .CanIgnore }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="ignore">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button class="secondary" type="submit">Ignore</button>
+            </form>
+          {{ end }}
+          {{ if .CanAbandon }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="abandon">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button class="secondary" type="submit">Abandon</button>
+            </form>
+          {{ end }}
+          {{ if .CanDeliver }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="deliver">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button class="warn" type="submit">{{ .DeliverLabel }}</button>
+            </form>
+          {{ end }}
         </div>
       </div>
     {{ else }}

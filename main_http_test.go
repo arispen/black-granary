@@ -83,6 +83,7 @@ func TestFragDashboardIncludesOOBUpdates(t *testing.T) {
 		t.Fatalf("GET /frag/dashboard status=%d", r.Code)
 	}
 	for _, want := range []string{
+		`id="realm-header" hx-swap-oob="outerHTML"`,
 		`id="event-log" hx-swap-oob="innerHTML"`,
 		`id="players" hx-swap-oob="innerHTML"`,
 		`id="toast" hx-swap-oob="innerHTML"`,
@@ -90,6 +91,72 @@ func TestFragDashboardIncludesOOBUpdates(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard fragment missing %q", want)
 		}
+	}
+}
+
+func TestFragDashboardDoesNotConsumeToast(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	s.Players["p1"] = &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	setToastLocked(s, "p1", "Chat cooldown active.")
+	s.mu.Unlock()
+
+	body := doReq(t, mux, http.MethodGet, "/frag/dashboard", nil, "p1", "127.0.0.1:1111").Body.String()
+	if !strings.Contains(body, "Chat cooldown active.") {
+		t.Fatalf("dashboard poll should include current toast message")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if got := s.ToastByPlayer["p1"]; got != "Chat cooldown active." {
+		t.Fatalf("dashboard poll should not consume toast, got %q", got)
+	}
+}
+
+func TestDashboardStandingPanelAndStateBasedActions(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	s.Players["p1"] = &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
+	s.mu.Unlock()
+
+	body := doReq(t, mux, http.MethodGet, "/frag/dashboard", nil, "p1", "127.0.0.1:1111").Body.String()
+	if !strings.Contains(body, "Your Standing in Black Granary") {
+		t.Fatalf("standing panel should render on dashboard")
+	}
+	if !strings.Contains(body, ">Accept<") || !strings.Contains(body, ">Ignore<") {
+		t.Fatalf("issued contract should show accept and ignore")
+	}
+	if !strings.Contains(body, `name="stance"`) {
+		t.Fatalf("issued contract should include stance selector")
+	}
+	if strings.Contains(body, ">Abandon<") || strings.Contains(body, ">Deliver") {
+		t.Fatalf("issued contract should not show abandon or deliver")
+	}
+
+	s.mu.Lock()
+	s.Contracts["c1"].Status = "Accepted"
+	s.Contracts["c1"].OwnerPlayerID = "p1"
+	s.Contracts["c1"].OwnerName = "Ash Crow (Guest)"
+	s.mu.Unlock()
+
+	body = doReq(t, mux, http.MethodGet, "/frag/dashboard", nil, "p1", "127.0.0.1:1111").Body.String()
+	if !strings.Contains(body, ">Abandon<") || !strings.Contains(body, "Deliver (&#43;20g)") {
+		t.Fatalf("accepted contract should show deliver and abandon")
+	}
+	if !strings.Contains(body, "Stance: Careful") {
+		t.Fatalf("accepted contract should show default stance")
+	}
+	if strings.Contains(body, ">Accept<") || strings.Contains(body, ">Ignore<") {
+		t.Fatalf("accepted contract should not show accept or ignore")
 	}
 }
 

@@ -1,0 +1,16 @@
+{{ define "header_inner" }}
+<h1>Black Granary</h1>
+<div class="muted">Shared test realm. Day {{ .World.DayNumber }} · {{ .World.Subphase }} · You are {{ .Player.Name }}</div>
+{{ end }}
+
+{{ define "header" }}
+<header id="realm-header" class="header">
+  {{ template "header_inner" . }}
+</header>
+{{ end }}
+
+{{ define "header_oob" }}
+<header id="realm-header" hx-swap-oob="outerHTML" class="header">
+  {{ template "header_inner" . }}
+</header>
+{{ end }}

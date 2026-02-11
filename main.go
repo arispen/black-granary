@@ -18,18 +18,19 @@ import (
 )
 
 const (
-	cookieName        = "pid"
-	maxEvents         = 300
-	maxChat           = 200
-	onlineWindow      = 60 * time.Second
-	inactiveWindow    = 120 * time.Second
-	actionCooldown    = 2 * time.Second
-	deliverCooldown   = 10 * time.Second
-	chatCooldown      = 2 * time.Second
-	adminToken        = "DEV"
-	serverAddr        = ":8080"
-	templateRoot      = "templates"
-	initialPlayerGold = 20
+	cookieName          = "pid"
+	maxEvents           = 300
+	maxChat             = 200
+	maxVisibleContracts = 12
+	onlineWindow        = 60 * time.Second
+	inactiveWindow      = 120 * time.Second
+	actionCooldown      = 2 * time.Second
+	deliverCooldown     = 10 * time.Second
+	chatCooldown        = 2 * time.Second
+	adminToken          = "DEV"
+	serverAddr          = ":8080"
+	templateRoot        = "templates"
+	initialPlayerGold   = 20
 )
 
 type WorldState struct {
@@ -46,11 +47,16 @@ type WorldState struct {
 }
 
 type Player struct {
-	ID       string
-	Name     string
-	Gold     int
-	Rep      int
-	LastSeen time.Time
+	ID                      string
+	Name                    string
+	Gold                    int
+	Rep                     int
+	Heat                    int
+	Rumors                  int
+	CompletedContracts      int
+	CompletedContractsToday int
+	CompletedTodayDateUTC   string
+	LastSeen                time.Time
 }
 
 type Contract struct {
@@ -60,6 +66,7 @@ type Contract struct {
 	Status        string
 	OwnerPlayerID string
 	OwnerName     string
+	Stance        string
 	IssuedAtTick  int64
 }
 
@@ -126,7 +133,24 @@ type ContractView struct {
 	Status        string
 	DeadlineTicks int
 	OwnerName     string
+	Stance        string
 	UrgencyClass  string
+	CanAccept     bool
+	CanIgnore     bool
+	CanAbandon    bool
+	CanDeliver    bool
+	DeliverLabel  string
+}
+
+type StandingView struct {
+	ReputationValue int
+	ReputationLabel string
+	HeatValue       int
+	HeatLabel       string
+	WealthGold      int
+	CompletedToday  int
+	CompletedTotal  int
+	Rumors          int
 }
 
 type EventView struct {
@@ -149,6 +173,7 @@ type PageData struct {
 	NowUTC           string
 	Player           *Player
 	PlayerTitle      string
+	Standing         StandingView
 	World            WorldState
 	Situation        string
 	Contracts        []ContractView
@@ -159,6 +184,20 @@ type PageData struct {
 	Toast            string
 	AcceptedCount    int
 	VisibleContractN int
+	TotalContractN   int
+}
+
+const (
+	contractStanceCareful = "Careful"
+	contractStanceFast    = "Fast"
+	contractStanceQuiet   = "Quiet"
+)
+
+type DeliverOutcome struct {
+	RewardGold int
+	HeatDelta  int
+	RepDelta   int
+	Stance     string
 }
 
 var nameFirst = []string{"Ash", "Bran", "Corin", "Dain", "Elow", "Fenn", "Garr", "Hale", "Ira", "Jory", "Kael", "Liora", "Mara", "Nell", "Orin", "Perrin", "Quill", "Rysa", "Sable", "Tarin"}
@@ -212,7 +251,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		defer store.mu.Unlock()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
-		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
+		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, false), false)
 	})
 
 	mux.HandleFunc("/frag/events", func(w http.ResponseWriter, r *http.Request) {
@@ -277,8 +316,9 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		action := strings.TrimSpace(r.FormValue("action"))
 		contractID := strings.TrimSpace(r.FormValue("contract_id"))
+		stance := strings.TrimSpace(r.FormValue("stance"))
 
-		handleActionLocked(store, p, now, action, contractID)
+		handleActionLocked(store, p, now, action, contractID, stance)
 		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
 	})
 
@@ -530,6 +570,7 @@ func runWorldTickLocked(store *Store, now time.Time) {
 					c.Status = "Issued"
 					c.OwnerPlayerID = ""
 					c.OwnerName = ""
+					c.Stance = ""
 					addEventLocked(store, Event{Type: "Contract", Severity: 2, Text: "A contractor vanishes; the job returns to the board.", At: now})
 				}
 				continue
@@ -549,9 +590,6 @@ func runWorldTickLocked(store *Store, now time.Time) {
 			w.GrainSupply += grainReward
 			w.GrainTier = grainTierFromSupply(w.GrainSupply)
 			fulfilledThisTick++
-			if c.OwnerPlayerID != "" {
-				applyFulfillmentRewardsLocked(store, c)
-			}
 			addEventLocked(store, Event{Type: "Contract", Severity: 2, Text: "A contract lands successfully despite the strain.", At: now})
 			continue
 		}
@@ -631,8 +669,12 @@ func addedTickNarrative(now time.Time, events []Event) bool {
 	return last.At.Equal(now)
 }
 
-func handleActionLocked(store *Store, p *Player, now time.Time, action, contractID string) {
+func handleActionLocked(store *Store, p *Player, now time.Time, action, contractID string, stanceInput ...string) {
 	c := store.Contracts[contractID]
+	stance := ""
+	if len(stanceInput) > 0 {
+		stance = stanceInput[0]
+	}
 
 	// Actions mutate local/player/contract state but never advance world time.
 	// Time progression is owned by fixed scheduler ticks for fair multi-player simulation.
@@ -665,6 +707,7 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 		c.Status = "Accepted"
 		c.OwnerPlayerID = p.ID
 		c.OwnerName = p.Name
+		c.Stance = normalizeContractStance(stance)
 		addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] commits to a dangerous contract.", p.Name), At: now})
 		setToastLocked(store, p.ID, "Contract accepted.")
 	case "ignore":
@@ -680,39 +723,43 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 			setToastLocked(store, p.ID, "You can only abandon your own accepted contract.")
 			return
 		}
+		p.Rep = clampInt(p.Rep-2, -100, 100)
 		c.Status = "Issued"
 		c.OwnerPlayerID = ""
 		c.OwnerName = ""
+		c.Stance = ""
 		addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] abandons a claim as the city watches.", p.Name), At: now})
+		addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: "Word spreads: your reputation in Black Granary shifts.", At: now})
 		setToastLocked(store, p.ID, "Contract abandoned.")
 	case "deliver":
-		if c == nil || c.Status != "Accepted" || c.OwnerPlayerID != p.ID {
-			setToastLocked(store, p.ID, "You can only deliver your accepted contract.")
+		if c == nil || c.OwnerPlayerID != p.ID || (c.Status != "Accepted" && c.Status != "Fulfilled") {
+			setToastLocked(store, p.ID, "You can only deliver your accepted or fulfilled contract.")
 			return
 		}
-		if tooSoon(store.LastDeliverAt[p.ID], now, deliverCooldown) {
-			setToastLocked(store, p.ID, "Delivery cooldown active.")
+		if c.Status == "Fulfilled" {
+			finalizeDeliveredContractLocked(store, p, c, now)
+			setToastLocked(store, p.ID, "Delivery completed.")
 			return
 		}
-		store.LastDeliverAt[p.ID] = now
-		p.Gold = maxInt(0, p.Gold-2)
-
-		chance := deliverChanceByTier(store.World.GrainTier)
-		if rollPercent(store.rng, chance) {
-			c.Status = "Fulfilled"
-			grainReward := 30
-			if c.Type == "Emergency" {
-				grainReward = 60
+		if c.Status == "Accepted" {
+			if tooSoon(store.LastDeliverAt[p.ID], now, deliverCooldown) {
+				setToastLocked(store, p.ID, "Delivery cooldown active.")
+				return
 			}
-			store.World.GrainSupply += grainReward
-			store.World.GrainTier = grainTierFromSupply(store.World.GrainSupply)
-			applyFulfillmentRewardsLocked(store, c)
-			addEventLocked(store, Event{Type: "Player", Severity: 3, Text: fmt.Sprintf("[%s] pushes a delivery through tense streets.", p.Name), At: now})
-			setToastLocked(store, p.ID, "Delivery succeeded.")
-		} else {
-			p.Rep = clampInt(p.Rep-5, -100, 100)
-			addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] attempts a delivery, but it collapses at the last moment.", p.Name), At: now})
-			setToastLocked(store, p.ID, "Delivery failed.")
+			store.LastDeliverAt[p.ID] = now
+			p.Gold = maxInt(0, p.Gold-2)
+
+			chance := deliverChanceByTier(store.World.GrainTier)
+			if rollPercent(store.rng, chance) {
+				finalizeDeliveredContractLocked(store, p, c, now)
+				setToastLocked(store, p.ID, "Delivery succeeded.")
+			} else {
+				p.Rep = clampInt(p.Rep-5, -100, 100)
+				addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] attempts a delivery, but it collapses at the last moment.", p.Name), At: now})
+				addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: "Word spreads: your reputation in Black Granary shifts.", At: now})
+				setToastLocked(store, p.ID, "Delivery failed.")
+			}
+			return
 		}
 	case "investigate":
 		lastTick, ok := store.LastInvestigateAt[p.ID]
@@ -775,6 +822,49 @@ func applyFailurePenaltyLocked(store *Store, p *Player) {
 		return
 	}
 	p.Rep = clampInt(p.Rep-10, -100, 100)
+}
+
+func finalizeDeliveredContractLocked(store *Store, p *Player, c *Contract, now time.Time) {
+	if c == nil || p == nil || c.Status == "Completed" {
+		return
+	}
+	outcome := computeDeliverOutcomeLocked(p, c)
+
+	c.Status = "Completed"
+	p.Gold += outcome.RewardGold
+	p.Rep = clampInt(p.Rep+outcome.RepDelta, -100, 100)
+	p.Heat = maxInt(0, p.Heat+outcome.HeatDelta)
+	incrementCompletedCountersLocked(p, now)
+	addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: stanceEventText(outcome.Stance), At: now})
+}
+
+func incrementCompletedCountersLocked(p *Player, now time.Time) {
+	if p == nil {
+		return
+	}
+	ensureTodayCounterLocked(p, now)
+	p.CompletedContracts++
+	p.CompletedContractsToday++
+}
+
+func ensureTodayCounterLocked(p *Player, now time.Time) {
+	if p == nil {
+		return
+	}
+	today := now.UTC().Format("2006-01-02")
+	if p.CompletedTodayDateUTC != today {
+		p.CompletedTodayDateUTC = today
+		p.CompletedContractsToday = 0
+	}
+}
+
+func adjustHeatForDeliveryLocked(p *Player, contractType string) {
+	if p == nil {
+		return
+	}
+	if contractType == "Smuggling" {
+		p.Heat++
+	}
 }
 
 func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *Player {
@@ -938,18 +1028,19 @@ func popToastLocked(store *Store, pid string) string {
 	return msg
 }
 
+func peekToastLocked(store *Store, pid string) string {
+	return store.ToastByPlayer[pid]
+}
+
 func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageData {
 	now := time.Now().UTC()
 	p := store.Players[playerID]
 	if p == nil {
 		return PageData{}
 	}
+	ensureTodayCounterLocked(p, now)
 
-	contracts := []ContractView{}
-	for _, c := range sortedContractsLocked(store) {
-		if p.Rep < -50 && c.Type == "Smuggling" && c.Status == "Issued" {
-			continue
-		}
+	contractView := func(c *Contract) ContractView {
 		urgency := ""
 		if c.DeadlineTicks <= 1 {
 			urgency = "urgent"
@@ -962,19 +1053,69 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		} else if ownerP := store.Players[c.OwnerPlayerID]; ownerP != nil {
 			owner = fmt.Sprintf("%s (%s)", ownerP.Name, reputationTitle(ownerP.Rep))
 		}
-		contracts = append(contracts, ContractView{
+		canAccept := c.Status == "Issued"
+		canIgnore := c.Status == "Issued"
+		canAbandon := c.Status == "Accepted" && c.OwnerPlayerID == p.ID
+		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
+		deliverLabel := "Deliver"
+		if canDeliver {
+			outcome := computeDeliverOutcomeLocked(p, c)
+			netGold := outcome.RewardGold
+			if c.Status == "Accepted" && c.OwnerPlayerID == p.ID {
+				netGold -= 2
+			}
+			deliverLabel = fmt.Sprintf("Deliver (%+dg)", netGold)
+		}
+		return ContractView{
 			ID:            c.ID,
 			Type:          c.Type,
 			Status:        c.Status,
 			DeadlineTicks: c.DeadlineTicks,
 			OwnerName:     owner,
+			Stance:        normalizeContractStance(c.Stance),
 			UrgencyClass:  urgency,
-		})
+			CanAccept:     canAccept,
+			CanIgnore:     canIgnore,
+			CanAbandon:    canAbandon,
+			CanDeliver:    canDeliver,
+			DeliverLabel:  deliverLabel,
+		}
+	}
+
+	activeContracts := []ContractView{}
+	terminalContracts := []ContractView{}
+	totalContractN := 0
+	for _, c := range sortedContractsLocked(store) {
+		if p.Rep < -50 && c.Type == "Smuggling" && c.Status == "Issued" {
+			continue
+		}
+		totalContractN++
+		cv := contractView(c)
+		switch c.Status {
+		case "Issued", "Accepted", "Fulfilled", "Ignored":
+			if len(activeContracts) < maxVisibleContracts {
+				activeContracts = append(activeContracts, cv)
+			}
+		default:
+			terminalContracts = append(terminalContracts, cv)
+		}
+	}
+
+	contracts := activeContracts
+	if len(contracts) < maxVisibleContracts {
+		remain := maxVisibleContracts - len(contracts)
+		if remain > len(terminalContracts) {
+			remain = len(terminalContracts)
+		}
+		contracts = append(contracts, terminalContracts[:remain]...)
 	}
 
 	events := make([]EventView, 0, len(store.Events))
 	for _, e := range store.Events {
 		events = append(events, EventView{DayNumber: e.DayNumber, Subphase: e.Subphase, Text: e.Text, At: e.At.Format("15:04:05")})
+	}
+	if len(events) > 3 {
+		events = events[len(events)-3:]
 	}
 
 	players := make([]PlayerSummary, 0, len(store.Players))
@@ -1001,12 +1142,24 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	toast := ""
 	if consumeToast {
 		toast = popToastLocked(store, playerID)
+	} else {
+		toast = peekToastLocked(store, playerID)
 	}
 
 	return PageData{
-		NowUTC:           now.Format(time.RFC3339),
-		Player:           p,
-		PlayerTitle:      reputationTitle(p.Rep),
+		NowUTC:      now.Format(time.RFC3339),
+		Player:      p,
+		PlayerTitle: reputationTitle(p.Rep),
+		Standing: StandingView{
+			ReputationValue: p.Rep,
+			ReputationLabel: standingReputationLabel(p.Rep),
+			HeatValue:       p.Heat,
+			HeatLabel:       standingHeatLabel(p.Heat),
+			WealthGold:      p.Gold,
+			CompletedToday:  p.CompletedContractsToday,
+			CompletedTotal:  p.CompletedContracts,
+			Rumors:          p.Rumors,
+		},
 		World:            store.World,
 		Situation:        store.World.Situation,
 		Contracts:        contracts,
@@ -1016,6 +1169,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Toast:            toast,
 		AcceptedCount:    playerAcceptedCountLocked(store, playerID),
 		VisibleContractN: len(contracts),
+		TotalContractN:   totalContractN,
 	}
 }
 
@@ -1044,6 +1198,7 @@ func renderActionLikeResponse(w http.ResponseWriter, tmpl *template.Template, da
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "players_oob", data)
 	if includeChatOOB {
@@ -1059,6 +1214,7 @@ func renderChatResponse(w http.ResponseWriter, tmpl *template.Template, data Pag
 		return
 	}
 	if includeOOB {
+		_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "players_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "toast_oob", data)
@@ -1180,6 +1336,32 @@ func reputationTitle(rep int) string {
 	}
 }
 
+func standingReputationLabel(rep int) string {
+	switch {
+	case rep <= -20:
+		return "Pariah"
+	case rep <= -6:
+		return "Disliked"
+	case rep <= 5:
+		return "Unknown"
+	case rep <= 19:
+		return "Trusted"
+	default:
+		return "Esteemed"
+	}
+}
+
+func standingHeatLabel(heat int) string {
+	switch {
+	case heat <= 0:
+		return "Clean"
+	case heat <= 4:
+		return "Watched"
+	default:
+		return "Wanted"
+	}
+}
+
 func payoutMultiplier(rep int) float64 {
 	v := 1.0 + float64(rep)/200.0
 	if v < 0.75 {
@@ -1189,6 +1371,86 @@ func payoutMultiplier(rep int) float64 {
 		return 1.5
 	}
 	return v
+}
+
+func normalizeContractStance(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "fast":
+		return contractStanceFast
+	case "quiet":
+		return contractStanceQuiet
+	default:
+		return contractStanceCareful
+	}
+}
+
+func baseContractRewardGold(p *Player, c *Contract) int {
+	baseGold := 25
+	if c != nil && c.Type == "Smuggling" {
+		baseGold = 35
+	}
+	rep := 0
+	if p != nil {
+		rep = p.Rep
+	}
+	return int(float64(baseGold) * payoutMultiplier(rep))
+}
+
+func baseContractRepDelta(c *Contract) int {
+	if c != nil && c.Type == "Smuggling" {
+		return 3
+	}
+	return 8
+}
+
+func baseContractHeatDelta(c *Contract) int {
+	if c != nil && c.Type == "Smuggling" {
+		return 1
+	}
+	return 0
+}
+
+func computeDeliverOutcomeLocked(p *Player, c *Contract) DeliverOutcome {
+	stance := contractStanceCareful
+	if c != nil {
+		stance = normalizeContractStance(c.Stance)
+	}
+	reward := baseContractRewardGold(p, c)
+	repDelta := baseContractRepDelta(c)
+	heatDelta := baseContractHeatDelta(c)
+
+	switch stance {
+	case contractStanceCareful:
+		reward = int(float64(reward) * 0.9)
+		heatDelta -= 1
+		repDelta += 1
+	case contractStanceFast:
+		reward = int(float64(reward) * 1.1)
+		heatDelta += 2
+	case contractStanceQuiet:
+		reward = int(float64(reward) * 0.8)
+		heatDelta -= 2
+	}
+	if c != nil && c.Type == "Smuggling" {
+		heatDelta++
+	}
+	return DeliverOutcome{
+		RewardGold: reward,
+		HeatDelta:  heatDelta,
+		RepDelta:   repDelta,
+		Stance:     stance,
+	}
+}
+
+func stanceEventText(stance string) string {
+	switch normalizeContractStance(stance) {
+	case contractStanceFast:
+		return "You move fast; whispers follow your wake."
+	case contractStanceQuiet:
+		return "You keep it quiet; fewer eyes notice."
+	default:
+		return "You deliver carefully; the Watch seems less interested."
+	}
 }
 
 func fulfillChanceForTier(tier string) int {
