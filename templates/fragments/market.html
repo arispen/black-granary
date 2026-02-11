@@ -1,0 +1,35 @@
+{{ define "market_inner" }}
+<h3>Market</h3>
+<div class="muted">Buy {{ .MarketBuyPrice }}g · Sell {{ .MarketSellPrice }}g · Stock {{ .MarketSupplySacks }} sacks</div>
+{{ if .MarketControlsActive }}
+  <div class="muted">Market controls active: {{ .MarketControlsTicks }} ticks</div>
+{{ end }}
+<div class="muted" style="margin-top:6px;">Your stockpile: {{ .MarketStockpile }} sacks</div>
+<div class="muted">Max buy {{ .MarketMaxBuy }} · Max sell {{ .MarketMaxSell }}</div>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:6px;">
+  <input type="hidden" name="action" value="buy_grain">
+  <input type="number" name="amount" min="1" max="{{ .MarketMaxBuy }}" value="1" style="width:70px;">
+  <button type="submit" {{ if .MarketBuyDisabled }}disabled{{ end }}>Buy</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="sell_grain">
+  <input type="number" name="amount" min="1" max="{{ .MarketMaxSell }}" value="1" style="width:70px;">
+  <button class="secondary" type="submit" {{ if .MarketSellDisabled }}disabled{{ end }}>Sell</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="donate_relief">
+  <button class="secondary" type="submit" {{ if .ReliefDisabled }}disabled{{ end }}>{{ .ReliefLabel }}</button>
+</form>
+{{ end }}
+
+{{ define "market" }}
+<div id="market" class="card">
+  {{ template "market_inner" . }}
+</div>
+{{ end }}
+
+{{ define "market_oob" }}
+<div id="market" hx-swap-oob="innerHTML" class="card">
+  {{ template "market_inner" . }}
+</div>
+{{ end }}

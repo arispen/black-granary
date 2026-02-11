@@ -89,6 +89,7 @@ func TestFragDashboardIncludesOOBUpdates(t *testing.T) {
 		`id="institutions" hx-swap-oob="innerHTML"`,
 		`id="intel" hx-swap-oob="innerHTML"`,
 		`id="ledger" hx-swap-oob="innerHTML"`,
+		`id="market" hx-swap-oob="innerHTML"`,
 		`id="toast" hx-swap-oob="innerHTML"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -199,6 +200,11 @@ func TestFragEndpointsReturnInnerContentForPolling(t *testing.T) {
 	ledger := doReq(t, mux, http.MethodGet, "/frag/ledger", nil, "", "127.0.0.1:1111").Body.String()
 	if strings.Contains(ledger, `id="ledger"`) {
 		t.Fatalf("/frag/ledger should return inner content only")
+	}
+
+	market := doReq(t, mux, http.MethodGet, "/frag/market", nil, "", "127.0.0.1:1111").Body.String()
+	if strings.Contains(market, `id="market"`) {
+		t.Fatalf("/frag/market should return inner content only")
 	}
 }
 

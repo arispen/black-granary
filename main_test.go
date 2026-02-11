@@ -216,6 +216,52 @@ func TestDeliveryCompletionIncrementsImpactAndHeat(t *testing.T) {
 	}
 }
 
+func TestMarketBuySellAndRelief(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+	s.World.GrainSupply = 120
+	s.World.GrainTier = grainTierFromSupply(s.World.GrainSupply)
+
+	base := marketBasePrice(s.World.GrainTier)
+	buyPrice := marketBuyPrice(base, s.Policies.TaxRatePct, s.World.RestrictedMarketsTicks)
+	sellPrice := marketSellPrice(base, s.Policies.TaxRatePct, s.World.RestrictedMarketsTicks)
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "buy_grain", Amount: 2})
+	if p.Grain != 2 {
+		t.Fatalf("expected 2 sacks after buy, got %d", p.Grain)
+	}
+	if p.Gold != 20-2*buyPrice {
+		t.Fatalf("gold after buy = %d, want %d", p.Gold, 20-2*buyPrice)
+	}
+	if s.World.GrainSupply != 120-2*grainUnitPerSack {
+		t.Fatalf("grain supply should drop after buy, got %d", s.World.GrainSupply)
+	}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "sell_grain", Amount: 1})
+	if p.Grain != 1 {
+		t.Fatalf("expected 1 sack after sell, got %d", p.Grain)
+	}
+	if p.Gold != 20-2*buyPrice+sellPrice {
+		t.Fatalf("gold after sell = %d, want %d", p.Gold, 20-2*buyPrice+sellPrice)
+	}
+	if s.World.GrainSupply != 120-2*grainUnitPerSack+grainUnitPerSack {
+		t.Fatalf("grain supply should rise after sell, got %d", s.World.GrainSupply)
+	}
+
+	p.Grain = reliefSackCost
+	s.World.UnrestValue = 20
+	prevUnrest := s.World.UnrestValue
+	handleActionInputLocked(s, p, now, ActionInput{Action: "donate_relief"})
+	if p.Grain != 0 {
+		t.Fatalf("relief should consume sacks, got %d", p.Grain)
+	}
+	if s.World.UnrestValue >= prevUnrest {
+		t.Fatalf("relief should reduce unrest, got %d", s.World.UnrestValue)
+	}
+}
+
 func TestDeliverConsumesRumorAndAppliesBonus(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

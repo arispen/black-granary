@@ -53,6 +53,13 @@
       hx-swap="innerHTML">
       {{ template "ledger_inner" . }}
     </div>
+    <div id="market" class="card"
+      hx-get="/frag/market"
+      hx-trigger="every 5s"
+      hx-target="#market"
+      hx-swap="innerHTML">
+      {{ template "market_inner" . }}
+    </div>
     <div id="toast" class="toast">{{ .Toast }}</div>
   </div>
 </div>

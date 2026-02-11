@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"math"
 	mathrand "math/rand"
 	"net"
 	"net/http"
@@ -39,6 +40,9 @@ const (
 	electionWindowTicks   = 2
 	highImpactDailyCap    = 3
 	loanDueTicks          = 4
+	grainUnitPerSack      = 6
+	marketMaxTrade        = 12
+	reliefSackCost        = 3
 )
 
 type WorldState struct {
@@ -58,6 +62,7 @@ type Player struct {
 	ID                      string
 	Name                    string
 	Gold                    int
+	Grain                   int
 	Rep                     int
 	Heat                    int
 	Rumors                  int
@@ -221,22 +226,22 @@ type PlayerSummary struct {
 }
 
 type ContractView struct {
-	ID            string
-	Type          string
-	Status        string
-	DeadlineTicks int
-	OwnerName     string
-	Stance        string
-	UrgencyClass  string
-	CanAccept     bool
-	CanIgnore     bool
-	CanAbandon    bool
-	CanDeliver    bool
-	DeliverLabel  string
+	ID              string
+	Type            string
+	Status          string
+	DeadlineTicks   int
+	OwnerName       string
+	Stance          string
+	UrgencyClass    string
+	CanAccept       bool
+	CanIgnore       bool
+	CanAbandon      bool
+	CanDeliver      bool
+	DeliverLabel    string
 	DeliverDisabled bool
-	ShowOutcome   bool
-	OutcomeLabel  string
-	OutcomeNote   string
+	ShowOutcome     bool
+	OutcomeLabel    string
+	OutcomeNote     string
 }
 
 type StandingView struct {
@@ -245,6 +250,7 @@ type StandingView struct {
 	HeatValue       int
 	HeatLabel       string
 	WealthGold      int
+	GrainStockpile  int
 	CompletedToday  int
 	CompletedTotal  int
 	Rumors          int
@@ -327,33 +333,48 @@ type PlayerOption struct {
 }
 
 type PageData struct {
-	NowUTC           string
-	Player           *Player
-	PlayerTitle      string
-	Standing         StandingView
-	World            WorldState
-	Situation        string
-	HighImpactRemaining int
-	HighImpactCap       int
-	InvestigateDisabled bool
-	InvestigateLabel    string
-	Contracts        []ContractView
-	Events           []EventView
-	Players          []PlayerSummary
-	Chat             []ChatView
-	ChatDraft        string
-	Toast            string
-	AcceptedCount    int
-	VisibleContractN int
-	TotalContractN   int
-	Seats            []SeatView
-	Policies         PolicyState
-	Rumors           []RumorView
-	Evidence         []EvidenceView
-	Loans            []LoanView
-	Obligations      []ObligationView
-	PlayerOptions    []PlayerOption
-	TickStatus       string
+	NowUTC               string
+	Player               *Player
+	PlayerTitle          string
+	Standing             StandingView
+	World                WorldState
+	Situation            string
+	HighImpactRemaining  int
+	HighImpactCap        int
+	InvestigateDisabled  bool
+	InvestigateLabel     string
+	MarketBasePrice      int
+	MarketBuyPrice       int
+	MarketSellPrice      int
+	MarketSupplySacks    int
+	MarketControlsTicks  int
+	MarketControlsActive bool
+	MarketStockpile      int
+	MarketMaxBuy         int
+	MarketMaxSell        int
+	MarketBuyDisabled    bool
+	MarketSellDisabled   bool
+	ReliefCost           int
+	ReliefDisabled       bool
+	ReliefLabel          string
+	HasOtherPlayers      bool
+	Contracts            []ContractView
+	Events               []EventView
+	Players              []PlayerSummary
+	Chat                 []ChatView
+	ChatDraft            string
+	Toast                string
+	AcceptedCount        int
+	VisibleContractN     int
+	TotalContractN       int
+	Seats                []SeatView
+	Policies             PolicyState
+	Rumors               []RumorView
+	Evidence             []EvidenceView
+	Loans                []LoanView
+	Obligations          []ObligationView
+	PlayerOptions        []PlayerOption
+	TickStatus           string
 }
 
 const (
@@ -493,6 +514,18 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "ledger_inner", buildPageDataLocked(store, p.ID, false))
+	})
+
+	mux.HandleFunc("/frag/market", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		p := ensurePlayerLocked(store, w, r)
+		p.LastSeen = time.Now().UTC()
+		renderPage(w, tmpl, "market_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
 	mux.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
@@ -1493,6 +1526,67 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		processLoanDefaultLocked(store, loan, now)
 		setToastLocked(store, p.ID, "You defaulted on the loan.")
+	case "buy_grain":
+		amount := clampInt(in.Amount, 1, marketMaxTrade)
+		if amount <= 0 {
+			setToastLocked(store, p.ID, "Choose a valid amount to buy.")
+			return
+		}
+		base := marketBasePrice(store.World.GrainTier)
+		buyPrice := marketBuyPrice(base, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
+		supplySacks := store.World.GrainSupply / grainUnitPerSack
+		if supplySacks <= 0 {
+			setToastLocked(store, p.ID, "Market stalls are empty.")
+			return
+		}
+		if amount > supplySacks {
+			setToastLocked(store, p.ID, fmt.Sprintf("Market can only supply %d sacks.", supplySacks))
+			return
+		}
+		totalCost := amount * buyPrice
+		if p.Gold < totalCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to buy %d sacks.", totalCost, amount))
+			return
+		}
+		p.Gold -= totalCost
+		p.Grain += amount
+		applyGrainSupplyDeltaLocked(store, now, -amount*grainUnitPerSack)
+		addEventLocked(store, Event{Type: "Market", Severity: 1, Text: fmt.Sprintf("[%s] buys %d sacks from the market.", p.Name, amount), At: now})
+		setToastLocked(store, p.ID, fmt.Sprintf("Bought %d sacks for %dg.", amount, totalCost))
+	case "sell_grain":
+		amount := clampInt(in.Amount, 1, marketMaxTrade)
+		if amount <= 0 {
+			setToastLocked(store, p.ID, "Choose a valid amount to sell.")
+			return
+		}
+		if p.Grain < amount {
+			setToastLocked(store, p.ID, fmt.Sprintf("You only hold %d sacks.", p.Grain))
+			return
+		}
+		base := marketBasePrice(store.World.GrainTier)
+		sellPrice := marketSellPrice(base, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
+		totalGain := amount * sellPrice
+		p.Grain -= amount
+		p.Gold += totalGain
+		applyGrainSupplyDeltaLocked(store, now, amount*grainUnitPerSack)
+		addEventLocked(store, Event{Type: "Market", Severity: 1, Text: fmt.Sprintf("[%s] sells %d sacks into the market.", p.Name, amount), At: now})
+		setToastLocked(store, p.ID, fmt.Sprintf("Sold %d sacks for %dg.", amount, totalGain))
+	case "donate_relief":
+		if p.Grain < reliefSackCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %d sacks to fund relief.", reliefSackCost))
+			return
+		}
+		p.Grain -= reliefSackCost
+		applyGrainSupplyDeltaLocked(store, now, reliefSackCost*grainUnitPerSack)
+		prevUnrest := store.World.UnrestTier
+		store.World.UnrestValue = clampInt(store.World.UnrestValue-6, 0, 100)
+		store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+		if store.World.UnrestTier != prevUnrest {
+			addEventLocked(store, Event{Type: "Unrest", Severity: 2, Text: unrestTierNarrative(prevUnrest, store.World.UnrestTier), At: now})
+		}
+		p.Rep = clampInt(p.Rep+2, -100, 100)
+		addEventLocked(store, Event{Type: "Relief", Severity: 2, Text: fmt.Sprintf("[%s] funds relief wagons for the hungry.", p.Name), At: now})
+		setToastLocked(store, p.ID, "Relief funded; unrest eases.")
 	case "bribe_official":
 		targetSeat := store.Seats["harbor_master"]
 		cost := maxInt(2, in.Amount)
@@ -1806,7 +1900,7 @@ func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *P
 
 	p := store.Players[pid]
 	if p == nil {
-		p = &Player{ID: pid, Name: uniqueGuestNameLocked(store), Gold: initialPlayerGold, Rep: 0, LastSeen: time.Now().UTC()}
+		p = &Player{ID: pid, Name: uniqueGuestNameLocked(store), Gold: initialPlayerGold, Grain: 0, Rep: 0, LastSeen: time.Now().UTC()}
 		store.Players[pid] = p
 		setToastLocked(store, pid, fmt.Sprintf("You arrive as %s.", p.Name))
 		addEventLocked(store, Event{Type: "Join", Severity: 1, Text: fmt.Sprintf("[%s] enters the city under a borrowed name.", p.Name), At: time.Now().UTC()})
@@ -2029,22 +2123,22 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			deliverLabel = fmt.Sprintf("Deliver (%+dg)", netGold)
 		}
 		return ContractView{
-			ID:            c.ID,
-			Type:          c.Type,
-			Status:        c.Status,
-			DeadlineTicks: c.DeadlineTicks,
-			OwnerName:     owner,
-			Stance:        normalizeContractStance(c.Stance),
-			UrgencyClass:  urgency,
-			CanAccept:     canAccept,
-			CanIgnore:     canIgnore,
-			CanAbandon:    canAbandon,
-			CanDeliver:    canDeliver,
-			DeliverLabel:  deliverLabel,
+			ID:              c.ID,
+			Type:            c.Type,
+			Status:          c.Status,
+			DeadlineTicks:   c.DeadlineTicks,
+			OwnerName:       owner,
+			Stance:          normalizeContractStance(c.Stance),
+			UrgencyClass:    urgency,
+			CanAccept:       canAccept,
+			CanIgnore:       canIgnore,
+			CanAbandon:      canAbandon,
+			CanDeliver:      canDeliver,
+			DeliverLabel:    deliverLabel,
 			DeliverDisabled: deliverDisabled,
-			ShowOutcome:   showOutcome,
-			OutcomeLabel:  outcomeLabel,
-			OutcomeNote:   outcomeNote,
+			ShowOutcome:     showOutcome,
+			OutcomeLabel:    outcomeLabel,
+			OutcomeNote:     outcomeNote,
 		}
 	}
 
@@ -2196,6 +2290,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		playerOptions = append(playerOptions, PlayerOption{ID: pp.ID, Name: pp.Name})
 	}
 	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
+	hasOtherPlayers := len(playerOptions) > 0
 
 	rumors := make([]RumorView, 0, len(store.Rumors))
 	for _, r := range store.Rumors {
@@ -2301,6 +2396,20 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		investigateLabel = fmt.Sprintf("Investigate (%dt)", investigateCooldown)
 	}
 
+	marketBase := marketBasePrice(store.World.GrainTier)
+	marketBuy := marketBuyPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
+	marketSell := marketSellPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
+	marketSupplySacks := store.World.GrainSupply / grainUnitPerSack
+	marketMaxBuy := minInt(marketSupplySacks, p.Gold/marketBuy)
+	if marketMaxBuy < 0 {
+		marketMaxBuy = 0
+	}
+	marketMaxSell := maxInt(0, p.Grain)
+	marketBuyDisabled := marketMaxBuy <= 0
+	marketSellDisabled := marketMaxSell <= 0
+	reliefDisabled := p.Grain < reliefSackCost
+	reliefLabel := fmt.Sprintf("Fund Relief (%d sacks)", reliefSackCost)
+
 	return PageData{
 		NowUTC:      now.Format(time.RFC3339),
 		Player:      p,
@@ -2311,32 +2420,48 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			HeatValue:       p.Heat,
 			HeatLabel:       standingHeatLabel(p.Heat),
 			WealthGold:      p.Gold,
+			GrainStockpile:  p.Grain,
 			CompletedToday:  p.CompletedContractsToday,
 			CompletedTotal:  p.CompletedContracts,
 			Rumors:          p.Rumors,
 		},
-		World:            store.World,
-		Situation:        store.World.Situation,
-		HighImpactRemaining: highImpactRemaining,
-		HighImpactCap:       highImpactDailyCap,
-		InvestigateDisabled: investigateDisabled,
-		InvestigateLabel:    investigateLabel,
-		Contracts:        contracts,
-		Events:           events,
-		Players:          players,
-		Chat:             chat,
-		Toast:            toast,
-		AcceptedCount:    playerAcceptedCountLocked(store, playerID),
-		VisibleContractN: len(contracts),
-		TotalContractN:   totalContractN,
-		Seats:            seats,
-		Policies:         store.Policies,
-		Rumors:           rumors,
-		Evidence:         evidence,
-		Loans:            loans,
-		Obligations:      obligations,
-		PlayerOptions:    playerOptions,
-		TickStatus:       tickStatus,
+		World:                store.World,
+		Situation:            store.World.Situation,
+		HighImpactRemaining:  highImpactRemaining,
+		HighImpactCap:        highImpactDailyCap,
+		InvestigateDisabled:  investigateDisabled,
+		InvestigateLabel:     investigateLabel,
+		MarketBasePrice:      marketBase,
+		MarketBuyPrice:       marketBuy,
+		MarketSellPrice:      marketSell,
+		MarketSupplySacks:    marketSupplySacks,
+		MarketControlsTicks:  store.World.RestrictedMarketsTicks,
+		MarketControlsActive: store.World.RestrictedMarketsTicks > 0,
+		MarketStockpile:      p.Grain,
+		MarketMaxBuy:         marketMaxBuy,
+		MarketMaxSell:        marketMaxSell,
+		MarketBuyDisabled:    marketBuyDisabled,
+		MarketSellDisabled:   marketSellDisabled,
+		ReliefCost:           reliefSackCost,
+		ReliefDisabled:       reliefDisabled,
+		ReliefLabel:          reliefLabel,
+		HasOtherPlayers:      hasOtherPlayers,
+		Contracts:            contracts,
+		Events:               events,
+		Players:              players,
+		Chat:                 chat,
+		Toast:                toast,
+		AcceptedCount:        playerAcceptedCountLocked(store, playerID),
+		VisibleContractN:     len(contracts),
+		TotalContractN:       totalContractN,
+		Seats:                seats,
+		Policies:             store.Policies,
+		Rumors:               rumors,
+		Evidence:             evidence,
+		Loans:                loans,
+		Obligations:          obligations,
+		PlayerOptions:        playerOptions,
+		TickStatus:           tickStatus,
 	}
 }
 
@@ -2381,6 +2506,7 @@ func renderActionLikeResponse(w http.ResponseWriter, tmpl *template.Template, da
 	_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)
+	_ = tmpl.ExecuteTemplate(w, "market_oob", data)
 	if includeChatOOB {
 		_ = tmpl.ExecuteTemplate(w, "chat_oob", data)
 	}
@@ -2400,6 +2526,7 @@ func renderChatResponse(w http.ResponseWriter, tmpl *template.Template, data Pag
 		_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)
+		_ = tmpl.ExecuteTemplate(w, "market_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "toast_oob", data)
 	}
 }
@@ -2554,6 +2681,48 @@ func payoutMultiplier(rep int) float64 {
 		return 1.5
 	}
 	return v
+}
+
+func marketBasePrice(tier string) int {
+	switch tier {
+	case "Tight":
+		return 3
+	case "Scarce":
+		return 5
+	case "Critical":
+		return 7
+	default:
+		return 2
+	}
+}
+
+func marketBuyPrice(base, taxRatePct, controlsTicks int) int {
+	price := base + int(math.Ceil(float64(base)*float64(taxRatePct)/100.0))
+	if controlsTicks > 0 {
+		price++
+	}
+	return maxInt(1, price)
+}
+
+func marketSellPrice(base, taxRatePct, controlsTicks int) int {
+	price := maxInt(1, base-1)
+	price -= int(math.Floor(float64(price) * float64(taxRatePct) / 100.0))
+	if controlsTicks > 0 {
+		price = maxInt(1, price-1)
+	}
+	return maxInt(1, price)
+}
+
+func applyGrainSupplyDeltaLocked(store *Store, now time.Time, delta int) {
+	if delta == 0 {
+		return
+	}
+	prevTier := store.World.GrainTier
+	store.World.GrainSupply = maxInt(0, store.World.GrainSupply+delta)
+	store.World.GrainTier = grainTierFromSupply(store.World.GrainSupply)
+	if store.World.GrainTier != prevTier {
+		addEventLocked(store, Event{Type: "Grain", Severity: 2, Text: grainTierNarrative(prevTier, store.World.GrainTier), At: now})
+	}
 }
 
 func normalizeContractStance(raw string) string {
