@@ -144,6 +144,7 @@ type ContractView struct {
 	CanAbandon    bool
 	CanDeliver    bool
 	DeliverLabel  string
+	DeliverDisabled bool
 	ShowOutcome   bool
 	OutcomeLabel  string
 	OutcomeNote   string
@@ -750,6 +751,10 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 			return
 		}
 		if c.Status == "Accepted" {
+			if p.Gold < 2 {
+				setToastLocked(store, p.ID, "You need 2g to attempt a delivery.")
+				return
+			}
 			if tooSoon(store.LastDeliverAt[p.ID], now, deliverCooldown) {
 				setToastLocked(store, p.ID, "Delivery cooldown active.")
 				return
@@ -1074,6 +1079,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
 
 		showOutcome := c.OwnerPlayerID == p.ID && (c.Status == "Accepted" || c.Status == "Fulfilled")
+		deliverDisabled := false
 		outcomeLabel := ""
 		outcomeNote := ""
 		var outcome DeliverOutcome
@@ -1082,6 +1088,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			outcomeLabel = fmt.Sprintf("%+dg, %+d rep, %+d heat", outcome.RewardGold, outcome.RepDelta, outcome.HeatDelta)
 			if c.Status == "Accepted" {
 				outcomeNote = "Costs 2g to attempt."
+				if p.Gold < 2 {
+					deliverDisabled = true
+					outcomeNote = "Need 2g to attempt."
+				}
 			}
 			if p.Rumors > 0 {
 				if outcomeNote != "" {
@@ -1112,6 +1122,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CanAbandon:    canAbandon,
 			CanDeliver:    canDeliver,
 			DeliverLabel:  deliverLabel,
+			DeliverDisabled: deliverDisabled,
 			ShowOutcome:   showOutcome,
 			OutcomeLabel:  outcomeLabel,
 			OutcomeNote:   outcomeNote,
