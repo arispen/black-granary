@@ -20,6 +20,65 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
+  <h3>Institutions and Offices</h3>
+  <div class="muted">Tax: {{ .Policies.TaxRatePct }}% · Permit: {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo: {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
+  <div class="contracts" style="margin-top:8px;">
+    {{ range .Seats }}
+      <div class="contract">
+        <div><strong>{{ .Name }}</strong> <span class="pill">{{ .InstitutionName }}</span></div>
+        <div class="meta">
+          <span>Holder: {{ .HolderName }}</span>
+          {{ if .IsElectionOpen }}
+            <span>Election open: {{ .ElectionWindowTicks }} ticks left</span>
+          {{ else }}
+            <span>Tenure: {{ .TenureTicksLeft }} ticks left</span>
+          {{ end }}
+        </div>
+        <div class="actions">
+          {{ if .CanCampaign }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="campaign_seat">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button type="submit">Campaign</button>
+            </form>
+          {{ end }}
+          {{ if .CanChallenge }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="challenge_seat">
+              <input type="hidden" name="contract_id" value="{{ .ID }}">
+              <button class="secondary" type="submit">Challenge</button>
+            </form>
+          {{ end }}
+          {{ if .CanToggleTaxHigh }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="set_tax_high">
+              <button class="secondary" type="submit">Tax 20%</button>
+            </form>
+          {{ end }}
+          {{ if .CanToggleTaxLow }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="set_tax_low">
+              <button class="secondary" type="submit">Tax 5%</button>
+            </form>
+          {{ end }}
+          {{ if .CanTogglePermit }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="toggle_permit">
+              <button class="secondary" type="submit">Toggle Permit</button>
+            </form>
+          {{ end }}
+          {{ if .CanToggleEmbargo }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="toggle_embargo">
+              <button class="secondary" type="submit">Toggle Embargo</button>
+            </form>
+          {{ end }}
+        </div>
+      </div>
+    {{ end }}
+  </div>
+</div>
+<div class="card" style="margin-top:12px;">
   <h3>Contracts</h3>
   <div class="muted">Accepted by you: {{ .AcceptedCount }} · Showing: {{ .VisibleContractN }} / {{ .TotalContractN }}</div>
   <div class="contracts" style="margin-top:8px;">
@@ -75,6 +134,23 @@
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="investigate">
       <button type="submit">Investigate</button>
+    </form>
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="petition_institution">
+      <button class="secondary" type="submit">Petition</button>
+    </form>
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="bribe_official">
+      <input type="hidden" name="amount" value="3">
+      <button class="secondary" type="submit">Bribe</button>
+    </form>
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="broker_deal">
+      <button class="secondary" type="submit">Broker Deal</button>
+    </form>
+    <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="invoke_rite">
+      <button class="secondary" type="submit">Invoke Rite</button>
     </form>
   </div>
 </div>

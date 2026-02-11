@@ -86,6 +86,9 @@ func TestFragDashboardIncludesOOBUpdates(t *testing.T) {
 		`id="realm-header" hx-swap-oob="outerHTML"`,
 		`id="event-log" hx-swap-oob="innerHTML"`,
 		`id="players" hx-swap-oob="innerHTML"`,
+		`id="institutions" hx-swap-oob="innerHTML"`,
+		`id="intel" hx-swap-oob="innerHTML"`,
+		`id="ledger" hx-swap-oob="innerHTML"`,
 		`id="toast" hx-swap-oob="innerHTML"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -131,6 +134,9 @@ func TestDashboardStandingPanelAndStateBasedActions(t *testing.T) {
 	body := doReq(t, mux, http.MethodGet, "/frag/dashboard", nil, "p1", "127.0.0.1:1111").Body.String()
 	if !strings.Contains(body, "Your Standing in Black Granary") {
 		t.Fatalf("standing panel should render on dashboard")
+	}
+	if !strings.Contains(body, "Institutions and Offices") {
+		t.Fatalf("institutions panel should render on dashboard")
 	}
 	if !strings.Contains(body, ">Accept<") || !strings.Contains(body, ">Ignore<") {
 		t.Fatalf("issued contract should show accept and ignore")
@@ -178,6 +184,21 @@ func TestFragEndpointsReturnInnerContentForPolling(t *testing.T) {
 	players := doReq(t, mux, http.MethodGet, "/frag/players", nil, "", "127.0.0.1:1111").Body.String()
 	if strings.Contains(players, `id="players"`) {
 		t.Fatalf("/frag/players should return inner content only")
+	}
+
+	institutions := doReq(t, mux, http.MethodGet, "/frag/institutions", nil, "", "127.0.0.1:1111").Body.String()
+	if strings.Contains(institutions, `id="institutions"`) {
+		t.Fatalf("/frag/institutions should return inner content only")
+	}
+
+	intel := doReq(t, mux, http.MethodGet, "/frag/intel", nil, "", "127.0.0.1:1111").Body.String()
+	if strings.Contains(intel, `id="intel"`) {
+		t.Fatalf("/frag/intel should return inner content only")
+	}
+
+	ledger := doReq(t, mux, http.MethodGet, "/frag/ledger", nil, "", "127.0.0.1:1111").Body.String()
+	if strings.Contains(ledger, `id="ledger"`) {
+		t.Fatalf("/frag/ledger should return inner content only")
 	}
 }
 

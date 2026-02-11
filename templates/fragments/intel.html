@@ -1,0 +1,67 @@
+{{ define "intel_inner" }}
+<h3>Intel</h3>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:0;">
+  <input type="hidden" name="action" value="seed_rumor">
+  <select name="target_id" aria-label="Rumor target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <input id="claim-input" name="claim" placeholder="Claim" style="min-width:180px;">
+  <button type="submit">Seed Rumor</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="investigate_target">
+  <select name="target_id" aria-label="Investigate target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <button class="secondary" type="submit">Investigate</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="publish_evidence">
+  <select name="target_id" aria-label="Publish target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <button class="secondary" type="submit">Publish Evidence</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="counter_narrative">
+  <select name="target_id" aria-label="Counter target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <button class="secondary" type="submit">Counter Narrative</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="threaten_exposure">
+  <select name="target_id" aria-label="Threaten target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <button class="warn" type="submit">Threaten Exposure</button>
+</form>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="accuse_heresy">
+  <select name="target_id" aria-label="Accuse target">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <button class="warn" type="submit">Accuse Heresy</button>
+</form>
+<div class="muted" style="margin-top:8px;">Rumors</div>
+<div class="events" style="max-height:160px;">
+  {{ range .Rumors }}
+    <div class="event-line">
+      <div class="event-meta">{{ .SourceName }} -> {{ .TargetName }} · cred {{ .Credibility }} · spread {{ .Spread }} · decay {{ .Decay }}</div>
+      <div>{{ .Claim }}</div>
+    </div>
+  {{ else }}<div class="muted">No active rumors.</div>{{ end }}
+</div>
+<div class="muted" style="margin-top:8px;">Your Evidence</div>
+<div class="events" style="max-height:140px;">
+  {{ range .Evidence }}
+    <div class="event-line"><div class="event-meta">{{ .TargetName }} · {{ .Topic }} · str {{ .Strength }} · expires {{ .ExpiryIn }}</div></div>
+  {{ else }}<div class="muted">No evidence held.</div>{{ end }}
+</div>
+{{ end }}
+
+{{ define "intel_oob" }}
+<div id="intel" hx-swap-oob="innerHTML" class="card">
+  {{ template "intel_inner" . }}
+</div>
+{{ end }}

@@ -35,6 +35,10 @@ const (
 	rumorInvestigateGain  = 1
 	rumorWhisperGain      = 1
 	rumorDeliverBonusGold = 3
+	seatTenureTicks       = 8
+	electionWindowTicks   = 2
+	highImpactDailyCap    = 3
+	loanDueTicks          = 4
 )
 
 type WorldState struct {
@@ -60,6 +64,7 @@ type Player struct {
 	CompletedContracts      int
 	CompletedContractsToday int
 	CompletedTodayDateUTC   string
+	RiteImmunityTicks       int
 	LastSeen                time.Time
 }
 
@@ -95,19 +100,99 @@ type ChatMessage struct {
 	Kind         string
 }
 
+type Institution struct {
+	ID   string
+	Name string
+}
+
+type Seat struct {
+	ID                  string
+	Name                string
+	InstitutionID       string
+	HolderPlayerID      string
+	HolderName          string
+	TenureTicksLeft     int
+	ElectionWindowTicks int
+}
+
+type PolicyState struct {
+	TaxRatePct             int
+	PermitRequiredHighRisk bool
+	SmugglingEmbargoTicks  int
+}
+
+type Rumor struct {
+	ID             int64
+	Claim          string
+	Topic          string
+	TargetPlayerID string
+	TargetName     string
+	SourcePlayerID string
+	SourceName     string
+	Credibility    int
+	Spread         int
+	Decay          int
+}
+
+type Evidence struct {
+	ID             int64
+	Topic          string
+	TargetPlayerID string
+	TargetName     string
+	SourcePlayerID string
+	SourceName     string
+	Strength       int
+	ExpiryTick     int64
+}
+
+type Loan struct {
+	ID               string
+	LenderPlayerID   string
+	LenderName       string
+	BorrowerPlayerID string
+	BorrowerName     string
+	Principal        int
+	Remaining        int
+	DueTick          int64
+	Status           string
+}
+
+type Obligation struct {
+	ID               string
+	CreditorPlayerID string
+	CreditorName     string
+	DebtorPlayerID   string
+	DebtorName       string
+	Reason           string
+	Severity         int
+	DueTick          int64
+	Status           string
+}
+
 type Store struct {
 	mu sync.Mutex
 
-	World     WorldState
-	Players   map[string]*Player
-	Contracts map[string]*Contract
+	World        WorldState
+	Players      map[string]*Player
+	Contracts    map[string]*Contract
+	Institutions map[string]*Institution
+	Seats        map[string]*Seat
+	Policies     PolicyState
+	Rumors       map[int64]*Rumor
+	Evidence     map[int64]*Evidence
+	Loans        map[string]*Loan
+	Obligations  map[string]*Obligation
 
 	Events []Event
 	Chat   []ChatMessage
 
-	NextEventID    int64
-	NextContractID int64
-	NextChatID     int64
+	NextEventID      int64
+	NextContractID   int64
+	NextChatID       int64
+	NextRumorID      int64
+	NextEvidenceID   int64
+	NextLoanID       int64
+	NextObligationID int64
 
 	LastDailyTickDate string
 	LastTickAt        time.Time
@@ -118,6 +203,10 @@ type Store struct {
 	LastActionAt      map[string]time.Time
 	LastDeliverAt     map[string]time.Time
 	LastInvestigateAt map[string]int64
+	LastSeatActionAt  map[string]int64
+	LastIntelActionAt map[string]int64
+	DailyActionDate   map[string]string
+	DailyHighImpactN  map[string]int
 	ToastByPlayer     map[string]string
 
 	rng *mathrand.Rand
@@ -173,6 +262,66 @@ type ChatView struct {
 	At        string
 }
 
+type SeatView struct {
+	ID                  string
+	Name                string
+	InstitutionName     string
+	HolderName          string
+	TenureTicksLeft     int
+	ElectionWindowTicks int
+	IsElectionOpen      bool
+	CanCampaign         bool
+	CanChallenge        bool
+	CanToggleTaxHigh    bool
+	CanToggleTaxLow     bool
+	CanTogglePermit     bool
+	CanToggleEmbargo    bool
+}
+
+type RumorView struct {
+	ID          int64
+	Claim       string
+	Topic       string
+	TargetName  string
+	SourceName  string
+	Credibility int
+	Spread      int
+	Decay       int
+}
+
+type EvidenceView struct {
+	ID         int64
+	Topic      string
+	TargetName string
+	SourceName string
+	Strength   int
+	ExpiryIn   int64
+}
+
+type LoanView struct {
+	ID           string
+	LenderName   string
+	BorrowerName string
+	Remaining    int
+	DueIn        int64
+	Status       string
+}
+
+type ObligationView struct {
+	ID           string
+	CreditorName string
+	DebtorName   string
+	Reason       string
+	Severity     int
+	DueIn        int64
+	Status       string
+}
+
+type PlayerOption struct {
+	ID   string
+	Name string
+}
+
 type PageData struct {
 	NowUTC           string
 	Player           *Player
@@ -189,6 +338,13 @@ type PageData struct {
 	AcceptedCount    int
 	VisibleContractN int
 	TotalContractN   int
+	Seats            []SeatView
+	Policies         PolicyState
+	Rumors           []RumorView
+	Evidence         []EvidenceView
+	Loans            []LoanView
+	Obligations      []ObligationView
+	PlayerOptions    []PlayerOption
 }
 
 const (
@@ -294,6 +450,42 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		renderPage(w, tmpl, "players_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
+	mux.HandleFunc("/frag/institutions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		p := ensurePlayerLocked(store, w, r)
+		p.LastSeen = time.Now().UTC()
+		renderPage(w, tmpl, "institutions_inner", buildPageDataLocked(store, p.ID, false))
+	})
+
+	mux.HandleFunc("/frag/intel", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		p := ensurePlayerLocked(store, w, r)
+		p.LastSeen = time.Now().UTC()
+		renderPage(w, tmpl, "intel_inner", buildPageDataLocked(store, p.ID, false))
+	})
+
+	mux.HandleFunc("/frag/ledger", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		p := ensurePlayerLocked(store, w, r)
+		p.LastSeen = time.Now().UTC()
+		renderPage(w, tmpl, "ledger_inner", buildPageDataLocked(store, p.ID, false))
+	})
+
 	mux.HandleFunc("/action", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -318,11 +510,20 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.LastActionAt[p.ID] = now
 
-		action := strings.TrimSpace(r.FormValue("action"))
-		contractID := strings.TrimSpace(r.FormValue("contract_id"))
-		stance := strings.TrimSpace(r.FormValue("stance"))
+		input := ActionInput{
+			Action:     strings.TrimSpace(r.FormValue("action")),
+			ContractID: strings.TrimSpace(r.FormValue("contract_id")),
+			Stance:     strings.TrimSpace(r.FormValue("stance")),
+			TargetID:   strings.TrimSpace(r.FormValue("target_id")),
+			Claim:      strings.TrimSpace(r.FormValue("claim")),
+			Topic:      strings.TrimSpace(r.FormValue("topic")),
+			LoanID:     strings.TrimSpace(r.FormValue("loan_id")),
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("amount"))); err == nil {
+			input.Amount = n
+		}
 
-		handleActionLocked(store, p, now, action, contractID, stance)
+		handleActionInputLocked(store, p, now, input)
 		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
 	})
 
@@ -457,6 +658,13 @@ func newStore() *Store {
 		},
 		Players:           map[string]*Player{},
 		Contracts:         map[string]*Contract{},
+		Institutions:      map[string]*Institution{},
+		Seats:             map[string]*Seat{},
+		Policies:          PolicyState{TaxRatePct: 0},
+		Rumors:            map[int64]*Rumor{},
+		Evidence:          map[int64]*Evidence{},
+		Loans:             map[string]*Loan{},
+		Obligations:       map[string]*Obligation{},
 		Events:            []Event{},
 		Chat:              []ChatMessage{},
 		LastDailyTickDate: "",
@@ -466,9 +674,14 @@ func newStore() *Store {
 		LastActionAt:      map[string]time.Time{},
 		LastDeliverAt:     map[string]time.Time{},
 		LastInvestigateAt: map[string]int64{},
+		LastSeatActionAt:  map[string]int64{},
+		LastIntelActionAt: map[string]int64{},
+		DailyActionDate:   map[string]string{},
+		DailyHighImpactN:  map[string]int{},
 		ToastByPlayer:     map[string]string{},
 		rng:               mathrand.New(mathrand.NewSource(now.UnixNano())),
 	}
+	initializeInstitutionsLocked(s)
 	addEventLocked(s, Event{Type: "Opening", Severity: 1, Text: "The granary gates creak open under a restless sky.", At: now})
 	return s
 }
@@ -487,6 +700,13 @@ func resetStoreLocked(s *Store) {
 	}
 	s.Players = map[string]*Player{}
 	s.Contracts = map[string]*Contract{}
+	s.Institutions = map[string]*Institution{}
+	s.Seats = map[string]*Seat{}
+	s.Policies = PolicyState{TaxRatePct: 0}
+	s.Rumors = map[int64]*Rumor{}
+	s.Evidence = map[int64]*Evidence{}
+	s.Loans = map[string]*Loan{}
+	s.Obligations = map[string]*Obligation{}
 	s.Events = []Event{}
 	s.Chat = []ChatMessage{}
 	s.NextEventID = 0
@@ -499,7 +719,12 @@ func resetStoreLocked(s *Store) {
 	s.LastActionAt = map[string]time.Time{}
 	s.LastDeliverAt = map[string]time.Time{}
 	s.LastInvestigateAt = map[string]int64{}
+	s.LastSeatActionAt = map[string]int64{}
+	s.LastIntelActionAt = map[string]int64{}
+	s.DailyActionDate = map[string]string{}
+	s.DailyHighImpactN = map[string]int{}
 	s.ToastByPlayer = map[string]string{}
+	initializeInstitutionsLocked(s)
 	addEventLocked(s, Event{Type: "Reset", Severity: 1, Text: "The test realm is reset; old deals and names are gone.", At: now})
 }
 
@@ -523,6 +748,10 @@ func startTickScheduler(store *Store) {
 
 func runWorldTickLocked(store *Store, now time.Time) {
 	store.TickCount++
+	processInstitutionTickLocked(store, now)
+	processIntelTickLocked(store, now)
+	processFinanceTickLocked(store, now)
+	processPlayerTickLocked(store)
 	w := &store.World
 	prevGrainTier := w.GrainTier
 	prevUnrestTier := w.UnrestTier
@@ -673,12 +902,313 @@ func addedTickNarrative(now time.Time, events []Event) bool {
 	return last.At.Equal(now)
 }
 
-func handleActionLocked(store *Store, p *Player, now time.Time, action, contractID string, stanceInput ...string) {
-	c := store.Contracts[contractID]
-	stance := ""
-	if len(stanceInput) > 0 {
-		stance = stanceInput[0]
+func initializeInstitutionsLocked(store *Store) {
+	store.Institutions["city_authority"] = &Institution{ID: "city_authority", Name: "City Authority"}
+	store.Institutions["merchant_league"] = &Institution{ID: "merchant_league", Name: "Merchant League"}
+	store.Institutions["temple"] = &Institution{ID: "temple", Name: "Temple"}
+
+	store.Seats["harbor_master"] = &Seat{
+		ID:              "harbor_master",
+		Name:            "Harbor Master",
+		InstitutionID:   "merchant_league",
+		HolderName:      "Captain Vey (NPC)",
+		TenureTicksLeft: seatTenureTicks,
 	}
+	store.Seats["master_of_coin"] = &Seat{
+		ID:              "master_of_coin",
+		Name:            "Master of Coin",
+		InstitutionID:   "city_authority",
+		HolderName:      "Clerk Marn (NPC)",
+		TenureTicksLeft: seatTenureTicks,
+	}
+	store.Seats["high_curate"] = &Seat{
+		ID:              "high_curate",
+		Name:            "High Curate",
+		InstitutionID:   "temple",
+		HolderName:      "Sister Hal (NPC)",
+		TenureTicksLeft: seatTenureTicks,
+	}
+}
+
+func processInstitutionTickLocked(store *Store, now time.Time) {
+	if store.Policies.SmugglingEmbargoTicks > 0 {
+		store.Policies.SmugglingEmbargoTicks--
+		if store.Policies.SmugglingEmbargoTicks == 0 {
+			addEventLocked(store, Event{Type: "Policy", Severity: 1, Text: "Smuggling embargo expires.", At: now})
+		}
+	}
+	for _, seat := range store.Seats {
+		if seat.ElectionWindowTicks > 0 {
+			seat.ElectionWindowTicks--
+			if seat.ElectionWindowTicks == 0 {
+				resolveElectionLocked(store, seat, now)
+			}
+			continue
+		}
+		seat.TenureTicksLeft--
+		if seat.TenureTicksLeft <= 0 {
+			seat.ElectionWindowTicks = electionWindowTicks
+			seat.TenureTicksLeft = 0
+			addEventLocked(store, Event{
+				Type:     "Institution",
+				Severity: 2,
+				Text:     fmt.Sprintf("Election opens for %s.", seat.Name),
+				At:       now,
+			})
+		}
+	}
+}
+
+func resolveElectionLocked(store *Store, seat *Seat, now time.Time) {
+	var winner *Player
+	for _, p := range store.Players {
+		if winner == nil || p.Rep > winner.Rep || (p.Rep == winner.Rep && p.Name < winner.Name) {
+			winner = p
+		}
+	}
+	if winner == nil {
+		seat.HolderPlayerID = ""
+		seat.HolderName = seatDefaultHolderName(seat.ID)
+		seat.TenureTicksLeft = seatTenureTicks
+		addEventLocked(store, Event{
+			Type:     "Institution",
+			Severity: 1,
+			Text:     fmt.Sprintf("%s returns to appointment by default.", seat.Name),
+			At:       now,
+		})
+		return
+	}
+	seat.HolderPlayerID = winner.ID
+	seat.HolderName = winner.Name
+	seat.TenureTicksLeft = seatTenureTicks
+	addEventLocked(store, Event{
+		Type:     "Institution",
+		Severity: 2,
+		Text:     fmt.Sprintf("[%s] secures election as %s.", winner.Name, seat.Name),
+		At:       now,
+	})
+}
+
+func seatDefaultHolderName(seatID string) string {
+	switch seatID {
+	case "harbor_master":
+		return "Captain Vey (NPC)"
+	case "master_of_coin":
+		return "Clerk Marn (NPC)"
+	case "high_curate":
+		return "Sister Hal (NPC)"
+	default:
+		return "Appointee (NPC)"
+	}
+}
+
+func playerHoldsSeatLocked(store *Store, playerID, seatID string) bool {
+	seat := store.Seats[seatID]
+	return seat != nil && seat.HolderPlayerID == playerID
+}
+
+func processIntelTickLocked(store *Store, now time.Time) {
+	for id, r := range store.Rumors {
+		r.Spread += maxInt(1, r.Credibility/3)
+		r.Decay--
+		if r.Spread >= 6 {
+			if target := store.Players[r.TargetPlayerID]; target != nil {
+				target.Rep = clampInt(target.Rep-1, -100, 100)
+				target.Heat = clampInt(target.Heat+1, 0, 20)
+			}
+		}
+		if r.Decay <= 0 {
+			delete(store.Rumors, id)
+		}
+	}
+
+	for id, ev := range store.Evidence {
+		if ev.ExpiryTick <= store.TickCount {
+			delete(store.Evidence, id)
+		}
+	}
+}
+
+func processFinanceTickLocked(store *Store, now time.Time) {
+	defaultsThisTick := 0
+	for _, loan := range store.Loans {
+		if loan.Status == "Active" && loan.DueTick <= store.TickCount && loan.Remaining > 0 {
+			processLoanDefaultLocked(store, loan, now)
+			defaultsThisTick++
+		}
+	}
+	if defaultsThisTick > 0 {
+		store.World.UnrestValue = clampInt(store.World.UnrestValue+defaultsThisTick*2, 0, 100)
+		store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+	}
+}
+
+func processPlayerTickLocked(store *Store) {
+	for _, p := range store.Players {
+		if p.RiteImmunityTicks > 0 {
+			p.RiteImmunityTicks--
+		}
+	}
+}
+
+func addRumorLocked(store *Store, r *Rumor, now time.Time) {
+	store.NextRumorID++
+	r.ID = store.NextRumorID
+	store.Rumors[r.ID] = r
+	addEventLocked(store, Event{
+		Type:     "Intel",
+		Severity: 2,
+		Text:     fmt.Sprintf("[%s] seeds a rumor about [%s].", r.SourceName, r.TargetName),
+		At:       now,
+	})
+}
+
+func addEvidenceLocked(store *Store, source *Player, target *Player, topic string, strength int, ttlTicks int64) {
+	if source == nil || target == nil {
+		return
+	}
+	store.NextEvidenceID++
+	id := store.NextEvidenceID
+	store.Evidence[id] = &Evidence{
+		ID:             id,
+		Topic:          topic,
+		TargetPlayerID: target.ID,
+		TargetName:     target.Name,
+		SourcePlayerID: source.ID,
+		SourceName:     source.Name,
+		Strength:       clampInt(strength, 1, 10),
+		ExpiryTick:     store.TickCount + ttlTicks,
+	}
+}
+
+func strongestEvidenceForLocked(store *Store, sourceID, targetID string) *Evidence {
+	var out *Evidence
+	for _, ev := range store.Evidence {
+		if ev.SourcePlayerID != sourceID || ev.TargetPlayerID != targetID {
+			continue
+		}
+		if out == nil || ev.Strength > out.Strength {
+			out = ev
+		}
+	}
+	return out
+}
+
+func addObligationLocked(store *Store, creditor, debtor *Player, reason string, severity int) {
+	if creditor == nil || debtor == nil {
+		return
+	}
+	store.NextObligationID++
+	id := fmt.Sprintf("o-%d", store.NextObligationID)
+	store.Obligations[id] = &Obligation{
+		ID:               id,
+		CreditorPlayerID: creditor.ID,
+		CreditorName:     creditor.Name,
+		DebtorPlayerID:   debtor.ID,
+		DebtorName:       debtor.Name,
+		Reason:           reason,
+		Severity:         clampInt(severity, 1, 5),
+		DueTick:          store.TickCount + 3,
+		Status:           "Open",
+	}
+}
+
+func triggerInstitutionSanctionLocked(store *Store, target *Player, now time.Time) {
+	if target == nil {
+		return
+	}
+	target.Heat = clampInt(target.Heat+3, 0, 20)
+	store.Policies.PermitRequiredHighRisk = true
+	if seat := store.Seats["harbor_master"]; seat != nil && seat.HolderPlayerID == target.ID {
+		seat.HolderPlayerID = ""
+		seat.HolderName = seatDefaultHolderName(seat.ID)
+		seat.TenureTicksLeft = seatTenureTicks
+	}
+	addEventLocked(store, Event{
+		Type:     "Institution",
+		Severity: 4,
+		Text:     fmt.Sprintf("Institutional inquiry sanctions [%s].", target.Name),
+		At:       now,
+	})
+}
+
+func processLoanDefaultLocked(store *Store, loan *Loan, now time.Time) {
+	if loan == nil || loan.Status != "Active" {
+		return
+	}
+	loan.Status = "Defaulted"
+	borrower := store.Players[loan.BorrowerPlayerID]
+	lender := store.Players[loan.LenderPlayerID]
+	if borrower != nil {
+		borrower.Rep = clampInt(borrower.Rep-6, -100, 100)
+		borrower.Heat = clampInt(borrower.Heat+2, 0, 20)
+	}
+	if lender != nil {
+		lender.Rep = clampInt(lender.Rep-1, -100, 100)
+	}
+	store.Policies.SmugglingEmbargoTicks = maxInt(store.Policies.SmugglingEmbargoTicks, 2)
+	addEventLocked(store, Event{
+		Type:     "Finance",
+		Severity: 4,
+		Text:     fmt.Sprintf("Loan default by [%s] triggers sanctions and market fear.", loan.BorrowerName),
+		At:       now,
+	})
+}
+
+func consumeHighImpactBudgetLocked(store *Store, playerID string, now time.Time) bool {
+	today := now.UTC().Format("2006-01-02")
+	if store.DailyActionDate[playerID] != today {
+		store.DailyActionDate[playerID] = today
+		store.DailyHighImpactN[playerID] = 0
+	}
+	if store.DailyHighImpactN[playerID] >= highImpactDailyCap {
+		return false
+	}
+	store.DailyHighImpactN[playerID]++
+	return true
+}
+
+func tooSoonTick(last, now int64, cooldown int64) bool {
+	if last == 0 {
+		return false
+	}
+	return now-last < cooldown
+}
+
+func chooseTopic(given, fallback string) string {
+	if strings.TrimSpace(given) != "" {
+		return strings.TrimSpace(given)
+	}
+	return fallback
+}
+
+type ActionInput struct {
+	Action     string
+	ContractID string
+	Stance     string
+	TargetID   string
+	Claim      string
+	Topic      string
+	LoanID     string
+	Amount     int
+}
+
+func handleActionLocked(store *Store, p *Player, now time.Time, action, contractID string, stanceInput ...string) {
+	in := ActionInput{
+		Action:     action,
+		ContractID: contractID,
+	}
+	if len(stanceInput) > 0 {
+		in.Stance = stanceInput[0]
+	}
+	handleActionInputLocked(store, p, now, in)
+}
+
+func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionInput) {
+	action := in.Action
+	contractID := in.ContractID
+	stance := in.Stance
+	c := store.Contracts[contractID]
 
 	// Actions mutate local/player/contract state but never advance world time.
 	// Time progression is owned by fixed scheduler ticks for fair multi-player simulation.
@@ -702,6 +1232,14 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 		}
 		if c.Type == "Smuggling" && p.Rep < -50 {
 			setToastLocked(store, p.ID, "Your reputation blocks smuggling contracts.")
+			return
+		}
+		if c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			setToastLocked(store, p.ID, "Smuggling is under embargo.")
+			return
+		}
+		if c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			setToastLocked(store, p.ID, "Permit required for emergency contracts.")
 			return
 		}
 		if playerAcceptedCountLocked(store, p.ID) >= 1 {
@@ -765,7 +1303,7 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 			}
 			return
 		}
-	case "investigate":
+	case "investigate", "investigate_target":
 		lastTick, ok := store.LastInvestigateAt[p.ID]
 		if !ok || store.TickCount-lastTick >= 3 {
 			store.LastInvestigateAt[p.ID] = store.TickCount
@@ -774,11 +1312,373 @@ func handleActionLocked(store *Store, p *Player, now time.Time, action, contract
 			p.Rep = clampInt(p.Rep+1, -100, 100)
 			p.Rumors += rumorInvestigateGain
 			addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] investigates rumors along the supply routes.", p.Name), At: now})
+			if in.TargetID != "" {
+				if target := store.Players[in.TargetID]; target != nil && target.ID != p.ID {
+					addEvidenceLocked(store, p, target, chooseTopic(in.Topic, "corruption"), 5+maxInt(0, p.Rep/25), 5)
+					setToastLocked(store, p.ID, "Your investigation found evidence.")
+					break
+				}
+			}
 			setToastLocked(store, p.ID, "Your investigation calmed the streets.")
 		} else {
 			addEventLocked(store, Event{Type: "Player", Severity: 1, Text: fmt.Sprintf("[%s] investigates rumors along the supply routes.", p.Name), At: now})
 			setToastLocked(store, p.ID, "You find only fragments and gossip.")
 		}
+	case "seed_rumor":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target for rumor seeding.")
+			return
+		}
+		if tooSoonTick(store.LastIntelActionAt[p.ID], store.TickCount, 1) {
+			setToastLocked(store, p.ID, "Rumor operation cooldown active.")
+			return
+		}
+		store.LastIntelActionAt[p.ID] = store.TickCount
+		claim := in.Claim
+		if claim == "" {
+			claim = fmt.Sprintf("%s diverted relief grain.", target.Name)
+		}
+		addRumorLocked(store, &Rumor{
+			Claim:          claim,
+			Topic:          chooseTopic(in.Topic, "corruption"),
+			TargetPlayerID: target.ID,
+			TargetName:     target.Name,
+			SourcePlayerID: p.ID,
+			SourceName:     p.Name,
+			Credibility:    clampInt(4+p.Rep/20, 1, 9),
+			Spread:         2,
+			Decay:          5,
+		}, now)
+		p.Heat = clampInt(p.Heat+1, 0, 20)
+		setToastLocked(store, p.ID, "Rumor seeded.")
+	case "publish_evidence":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target to publish evidence.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		ev := strongestEvidenceForLocked(store, p.ID, target.ID)
+		if ev == nil {
+			setToastLocked(store, p.ID, "You lack evidence on that target.")
+			return
+		}
+		delete(store.Evidence, ev.ID)
+		target.Rep = clampInt(target.Rep-ev.Strength, -100, 100)
+		target.Heat = clampInt(target.Heat+ev.Strength/2+1, 0, 20)
+		p.Rep = clampInt(p.Rep+2, -100, 100)
+		addEventLocked(store, Event{
+			Type:     "Intel",
+			Severity: 3,
+			Text:     fmt.Sprintf("[%s] publishes evidence against [%s].", p.Name, target.Name),
+			At:       now,
+		})
+		if ev.Strength >= 6 {
+			triggerInstitutionSanctionLocked(store, target, now)
+		}
+		setToastLocked(store, p.ID, "Evidence published.")
+	case "counter_narrative":
+		target := store.Players[in.TargetID]
+		if target == nil {
+			setToastLocked(store, p.ID, "Choose a rumor target to counter.")
+			return
+		}
+		changed := false
+		for _, r := range store.Rumors {
+			if r.TargetPlayerID != target.ID {
+				continue
+			}
+			r.Spread = maxInt(0, r.Spread-2)
+			r.Decay = maxInt(0, r.Decay-2)
+			changed = true
+		}
+		if changed {
+			p.Rep = clampInt(p.Rep+1, -100, 100)
+			setToastLocked(store, p.ID, "Counter-narrative slows rumor spread.")
+		} else {
+			setToastLocked(store, p.ID, "No major rumor wave found to counter.")
+		}
+	case "loan_offer":
+		target := store.Players[in.TargetID]
+		principal := clampInt(in.Amount, 1, 1000)
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a borrower.")
+			return
+		}
+		if principal <= 0 || p.Gold < principal {
+			setToastLocked(store, p.ID, "Insufficient gold to issue loan.")
+			return
+		}
+		store.NextLoanID++
+		id := fmt.Sprintf("l-%d", store.NextLoanID)
+		store.Loans[id] = &Loan{
+			ID:               id,
+			LenderPlayerID:   p.ID,
+			LenderName:       p.Name,
+			BorrowerPlayerID: target.ID,
+			BorrowerName:     target.Name,
+			Principal:        principal,
+			Remaining:        principal,
+			DueTick:          store.TickCount + loanDueTicks,
+			Status:           "Offered",
+		}
+		addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] offers a loan to [%s].", p.Name, target.Name), At: now})
+		setToastLocked(store, p.ID, "Loan offer issued.")
+	case "loan_accept":
+		loan := store.Loans[in.LoanID]
+		if loan == nil || loan.Status != "Offered" || loan.BorrowerPlayerID != p.ID {
+			setToastLocked(store, p.ID, "No matching loan offer.")
+			return
+		}
+		lender := store.Players[loan.LenderPlayerID]
+		if lender == nil || lender.Gold < loan.Principal {
+			setToastLocked(store, p.ID, "Lender cannot fund this loan.")
+			loan.Status = "Cancelled"
+			return
+		}
+		lender.Gold -= loan.Principal
+		p.Gold += loan.Principal
+		loan.Status = "Active"
+		addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] accepts credit from [%s].", p.Name, lender.Name), At: now})
+		setToastLocked(store, p.ID, "Loan accepted.")
+	case "repay":
+		loan := store.Loans[in.LoanID]
+		if loan == nil || loan.Status != "Active" || loan.BorrowerPlayerID != p.ID {
+			setToastLocked(store, p.ID, "No active loan to repay.")
+			return
+		}
+		amount := in.Amount
+		if amount <= 0 || amount > loan.Remaining {
+			amount = loan.Remaining
+		}
+		if p.Gold < amount {
+			setToastLocked(store, p.ID, "Not enough gold to repay.")
+			return
+		}
+		lender := store.Players[loan.LenderPlayerID]
+		p.Gold -= amount
+		loan.Remaining -= amount
+		if lender != nil {
+			lender.Gold += amount
+			lender.Rep = clampInt(lender.Rep+1, -100, 100)
+		}
+		if loan.Remaining == 0 {
+			loan.Status = "Repaid"
+			p.Rep = clampInt(p.Rep+2, -100, 100)
+			addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] repays debt to [%s].", p.Name, loan.LenderName), At: now})
+		}
+		setToastLocked(store, p.ID, "Loan repayment processed.")
+	case "default":
+		loan := store.Loans[in.LoanID]
+		if loan == nil || loan.Status != "Active" || loan.BorrowerPlayerID != p.ID {
+			setToastLocked(store, p.ID, "No active loan to default.")
+			return
+		}
+		processLoanDefaultLocked(store, loan, now)
+		setToastLocked(store, p.ID, "You defaulted on the loan.")
+	case "bribe_official":
+		targetSeat := store.Seats["harbor_master"]
+		cost := maxInt(2, in.Amount)
+		if p.Gold < cost {
+			setToastLocked(store, p.ID, "You cannot afford the bribe.")
+			return
+		}
+		p.Gold -= cost
+		p.Heat = clampInt(p.Heat+2, 0, 20)
+		if targetSeat != nil && targetSeat.HolderPlayerID != "" && targetSeat.HolderPlayerID != p.ID {
+			p.Rep = clampInt(p.Rep+1, -100, 100)
+		}
+		addEventLocked(store, Event{Type: "Institution", Severity: 3, Text: fmt.Sprintf("[%s] bribes officials for temporary access.", p.Name), At: now})
+		setToastLocked(store, p.ID, "Bribe executed.")
+	case "petition_institution":
+		if p.Rep >= 10 {
+			p.Heat = maxInt(0, p.Heat-1)
+			store.World.UnrestValue = maxInt(0, store.World.UnrestValue-2)
+			store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+			setToastLocked(store, p.ID, "Your petition is heard.")
+		} else {
+			p.Rep = clampInt(p.Rep-1, -100, 100)
+			setToastLocked(store, p.ID, "Your petition is ignored.")
+		}
+	case "threaten_exposure":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		ev := strongestEvidenceForLocked(store, p.ID, target.ID)
+		if ev == nil {
+			setToastLocked(store, p.ID, "You need evidence before threatening exposure.")
+			return
+		}
+		payout := minInt(6, maxInt(2, target.Gold/3))
+		if payout > 0 {
+			target.Gold -= payout
+			p.Gold += payout
+			addObligationLocked(store, p, target, "silence payment", 2)
+			setToastLocked(store, p.ID, "Exposure threat forces a concession.")
+		} else {
+			target.Rep = clampInt(target.Rep-3, -100, 100)
+			setToastLocked(store, p.ID, "Target cannot pay; reputation damage lands instead.")
+		}
+	case "broker_deal":
+		if p.Gold < 2 {
+			setToastLocked(store, p.ID, "Need 2g to broker a deal.")
+			return
+		}
+		p.Gold -= 2
+		boosted := false
+		for _, c := range store.Contracts {
+			if c.Status == "Issued" {
+				c.DeadlineTicks++
+				boosted = true
+				break
+			}
+		}
+		if boosted {
+			p.Rep = clampInt(p.Rep+1, -100, 100)
+			addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] brokers a multi-party deal to stabilize routes.", p.Name), At: now})
+			setToastLocked(store, p.ID, "Deal brokered; contract pressure eased.")
+		} else {
+			setToastLocked(store, p.ID, "No contract available to broker.")
+		}
+	case "invoke_rite":
+		p.RiteImmunityTicks = 3
+		p.Rep = clampInt(p.Rep+2, -100, 100)
+		addEventLocked(store, Event{Type: "Doctrine", Severity: 2, Text: fmt.Sprintf("[%s] invokes rite and claims moral protection.", p.Name), At: now})
+		setToastLocked(store, p.ID, "Rite invoked: temporary inquiry immunity.")
+	case "accuse_heresy":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		if target.RiteImmunityTicks > 0 {
+			p.Rep = clampInt(p.Rep-2, -100, 100)
+			setToastLocked(store, p.ID, "Ritual immunity blunts your accusation.")
+			return
+		}
+		successChance := 35 + maxInt(0, p.Rep)/3
+		if rollPercent(store.rng, minInt(successChance, 85)) {
+			target.Rep = clampInt(target.Rep-6, -100, 100)
+			target.Heat = clampInt(target.Heat+2, 0, 20)
+			p.Rep = clampInt(p.Rep+1, -100, 100)
+			addEventLocked(store, Event{Type: "Doctrine", Severity: 3, Text: fmt.Sprintf("[%s] accuses [%s] of heresy; crowds demand inquiry.", p.Name, target.Name), At: now})
+			setToastLocked(store, p.ID, "Accusation gains traction.")
+		} else {
+			p.Rep = clampInt(p.Rep-3, -100, 100)
+			setToastLocked(store, p.ID, "Your accusation backfires.")
+		}
+	case "campaign_seat":
+		seat := store.Seats[contractID]
+		if seat == nil || seat.ElectionWindowTicks <= 0 {
+			setToastLocked(store, p.ID, "No election is open for that seat.")
+			return
+		}
+		seat.HolderPlayerID = p.ID
+		seat.HolderName = p.Name
+		seat.ElectionWindowTicks = 0
+		seat.TenureTicksLeft = seatTenureTicks
+		addEventLocked(store, Event{
+			Type:     "Institution",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] wins the seat of %s.", p.Name, seat.Name),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("You now hold %s.", seat.Name))
+	case "challenge_seat":
+		seat := store.Seats[contractID]
+		if seat == nil {
+			setToastLocked(store, p.ID, "Seat not found.")
+			return
+		}
+		lastTick, ok := store.LastSeatActionAt[p.ID]
+		if ok && store.TickCount-lastTick < 2 {
+			setToastLocked(store, p.ID, "Institution challenge cooldown active.")
+			return
+		}
+		store.LastSeatActionAt[p.ID] = store.TickCount
+		if seat.HolderPlayerID == p.ID {
+			setToastLocked(store, p.ID, "You already hold that seat.")
+			return
+		}
+		chance := 30 + maxInt(0, p.Rep)/2
+		if rollPercent(store.rng, minInt(chance, 85)) {
+			seat.HolderPlayerID = p.ID
+			seat.HolderName = p.Name
+			seat.ElectionWindowTicks = 0
+			seat.TenureTicksLeft = seatTenureTicks
+			p.Rep = clampInt(p.Rep+2, -100, 100)
+			addEventLocked(store, Event{
+				Type:     "Institution",
+				Severity: 3,
+				Text:     fmt.Sprintf("[%s] forces a successful censure and takes %s.", p.Name, seat.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Your censure challenge succeeded.")
+		} else {
+			p.Rep = clampInt(p.Rep-3, -100, 100)
+			addEventLocked(store, Event{
+				Type:     "Institution",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] fails to censure the current %s.", p.Name, seat.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Your challenge failed and cost political capital.")
+		}
+	case "set_tax_low":
+		if !playerHoldsSeatLocked(store, p.ID, "master_of_coin") {
+			setToastLocked(store, p.ID, "Only the Master of Coin can set taxes.")
+			return
+		}
+		store.Policies.TaxRatePct = 5
+		addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] lowers tax to 5%%.", p.Name), At: now})
+		setToastLocked(store, p.ID, "Tax policy updated.")
+	case "set_tax_high":
+		if !playerHoldsSeatLocked(store, p.ID, "master_of_coin") {
+			setToastLocked(store, p.ID, "Only the Master of Coin can set taxes.")
+			return
+		}
+		store.Policies.TaxRatePct = 20
+		addEventLocked(store, Event{Type: "Policy", Severity: 3, Text: fmt.Sprintf("[%s] raises tax to 20%%.", p.Name), At: now})
+		setToastLocked(store, p.ID, "Tax policy updated.")
+	case "toggle_permit":
+		if !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			setToastLocked(store, p.ID, "Only the Harbor Master can control permits.")
+			return
+		}
+		store.Policies.PermitRequiredHighRisk = !store.Policies.PermitRequiredHighRisk
+		state := "lifted"
+		if store.Policies.PermitRequiredHighRisk {
+			state = "required"
+		}
+		addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] marks emergency permits as %s.", p.Name, state), At: now})
+		setToastLocked(store, p.ID, "Permit policy updated.")
+	case "toggle_embargo":
+		if !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			setToastLocked(store, p.ID, "Only the Harbor Master can set embargoes.")
+			return
+		}
+		if store.Policies.SmugglingEmbargoTicks > 0 {
+			store.Policies.SmugglingEmbargoTicks = 0
+			addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] lifts the smuggling embargo.", p.Name), At: now})
+		} else {
+			store.Policies.SmugglingEmbargoTicks = 3
+			addEventLocked(store, Event{Type: "Policy", Severity: 3, Text: fmt.Sprintf("[%s] imposes a smuggling embargo.", p.Name), At: now})
+		}
+		setToastLocked(store, p.ID, "Embargo policy updated.")
 	default:
 		setToastLocked(store, p.ID, "Unknown action.")
 	}
@@ -834,7 +1734,7 @@ func finalizeDeliveredContractLocked(store *Store, p *Player, c *Contract, now t
 	if c == nil || p == nil || c.Status == "Completed" {
 		return
 	}
-	outcome := computeDeliverOutcomeLocked(p, c)
+	outcome := computeDeliverOutcomeLocked(store, p, c)
 
 	c.Status = "Completed"
 	p.Gold += outcome.RewardGold
@@ -1070,7 +1970,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
 		deliverLabel := "Deliver"
 		if canDeliver {
-			outcome := computeDeliverOutcomeLocked(p, c)
+			outcome := computeDeliverOutcomeLocked(store, p, c)
 			netGold := outcome.RewardGold
 			if c.Status == "Accepted" && c.OwnerPlayerID == p.ID {
 				netGold -= 2
@@ -1205,6 +2105,113 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		chat = chat[len(chat)-80:]
 	}
 
+	seatOrder := []string{"harbor_master", "master_of_coin", "high_curate"}
+	seats := make([]SeatView, 0, len(seatOrder))
+	for _, seatID := range seatOrder {
+		seat := store.Seats[seatID]
+		if seat == nil {
+			continue
+		}
+		instName := ""
+		if inst := store.Institutions[seat.InstitutionID]; inst != nil {
+			instName = inst.Name
+		}
+		seats = append(seats, SeatView{
+			ID:                  seat.ID,
+			Name:                seat.Name,
+			InstitutionName:     instName,
+			HolderName:          seat.HolderName,
+			TenureTicksLeft:     seat.TenureTicksLeft,
+			ElectionWindowTicks: seat.ElectionWindowTicks,
+			IsElectionOpen:      seat.ElectionWindowTicks > 0,
+			CanCampaign:         seat.ElectionWindowTicks > 0,
+			CanChallenge:        seat.ElectionWindowTicks == 0 && seat.HolderPlayerID != p.ID,
+			CanToggleTaxHigh:    seat.ID == "master_of_coin" && seat.HolderPlayerID == p.ID && store.Policies.TaxRatePct != 20,
+			CanToggleTaxLow:     seat.ID == "master_of_coin" && seat.HolderPlayerID == p.ID && store.Policies.TaxRatePct != 5,
+			CanTogglePermit:     seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
+			CanToggleEmbargo:    seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
+		})
+	}
+
+	playerOptions := make([]PlayerOption, 0, len(store.Players))
+	for _, pp := range store.Players {
+		if pp.ID == p.ID {
+			continue
+		}
+		playerOptions = append(playerOptions, PlayerOption{ID: pp.ID, Name: pp.Name})
+	}
+	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
+
+	rumors := make([]RumorView, 0, len(store.Rumors))
+	for _, r := range store.Rumors {
+		rumors = append(rumors, RumorView{
+			ID:          r.ID,
+			Claim:       r.Claim,
+			Topic:       r.Topic,
+			TargetName:  r.TargetName,
+			SourceName:  r.SourceName,
+			Credibility: r.Credibility,
+			Spread:      r.Spread,
+			Decay:       r.Decay,
+		})
+	}
+	sort.Slice(rumors, func(i, j int) bool { return rumors[i].ID > rumors[j].ID })
+	if len(rumors) > 8 {
+		rumors = rumors[:8]
+	}
+
+	evidence := make([]EvidenceView, 0, len(store.Evidence))
+	for _, ev := range store.Evidence {
+		if ev.SourcePlayerID != p.ID {
+			continue
+		}
+		evidence = append(evidence, EvidenceView{
+			ID:         ev.ID,
+			Topic:      ev.Topic,
+			TargetName: ev.TargetName,
+			SourceName: ev.SourceName,
+			Strength:   ev.Strength,
+			ExpiryIn:   int64(maxInt(0, int(ev.ExpiryTick-store.TickCount))),
+		})
+	}
+	sort.Slice(evidence, func(i, j int) bool { return evidence[i].ID > evidence[j].ID })
+	if len(evidence) > 8 {
+		evidence = evidence[:8]
+	}
+
+	loans := make([]LoanView, 0, len(store.Loans))
+	for _, ln := range store.Loans {
+		if ln.BorrowerPlayerID != p.ID && ln.LenderPlayerID != p.ID {
+			continue
+		}
+		loans = append(loans, LoanView{
+			ID:           ln.ID,
+			LenderName:   ln.LenderName,
+			BorrowerName: ln.BorrowerName,
+			Remaining:    ln.Remaining,
+			DueIn:        int64(maxInt(0, int(ln.DueTick-store.TickCount))),
+			Status:       ln.Status,
+		})
+	}
+	sort.Slice(loans, func(i, j int) bool { return loans[i].ID > loans[j].ID })
+
+	obligations := make([]ObligationView, 0, len(store.Obligations))
+	for _, ob := range store.Obligations {
+		if ob.DebtorPlayerID != p.ID && ob.CreditorPlayerID != p.ID {
+			continue
+		}
+		obligations = append(obligations, ObligationView{
+			ID:           ob.ID,
+			CreditorName: ob.CreditorName,
+			DebtorName:   ob.DebtorName,
+			Reason:       ob.Reason,
+			Severity:     ob.Severity,
+			DueIn:        int64(maxInt(0, int(ob.DueTick-store.TickCount))),
+			Status:       ob.Status,
+		})
+	}
+	sort.Slice(obligations, func(i, j int) bool { return obligations[i].ID > obligations[j].ID })
+
 	toast := ""
 	if consumeToast {
 		toast = popToastLocked(store, playerID)
@@ -1236,6 +2243,13 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		AcceptedCount:    playerAcceptedCountLocked(store, playerID),
 		VisibleContractN: len(contracts),
 		TotalContractN:   totalContractN,
+		Seats:            seats,
+		Policies:         store.Policies,
+		Rumors:           rumors,
+		Evidence:         evidence,
+		Loans:            loans,
+		Obligations:      obligations,
+		PlayerOptions:    playerOptions,
 	}
 }
 
@@ -1277,6 +2291,9 @@ func renderActionLikeResponse(w http.ResponseWriter, tmpl *template.Template, da
 	_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "players_oob", data)
+	_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
+	_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
+	_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)
 	if includeChatOOB {
 		_ = tmpl.ExecuteTemplate(w, "chat_oob", data)
 	}
@@ -1293,6 +2310,9 @@ func renderChatResponse(w http.ResponseWriter, tmpl *template.Template, data Pag
 		_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "players_oob", data)
+		_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
+		_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
+		_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "toast_oob", data)
 	}
 }
@@ -1486,7 +2506,7 @@ func baseContractHeatDelta(c *Contract) int {
 	return 0
 }
 
-func computeDeliverOutcomeLocked(p *Player, c *Contract) DeliverOutcome {
+func computeDeliverOutcomeLocked(store *Store, p *Player, c *Contract) DeliverOutcome {
 	stance := contractStanceCareful
 	if c != nil {
 		stance = normalizeContractStance(c.Stance)
@@ -1512,6 +2532,12 @@ func computeDeliverOutcomeLocked(p *Player, c *Contract) DeliverOutcome {
 	}
 	if p != nil && p.Rumors > 0 {
 		reward += rumorDeliverBonusGold
+	}
+	if store != nil {
+		reward = reward * (100 - clampInt(store.Policies.TaxRatePct, 0, 40)) / 100
+		if c != nil && c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 {
+			reward += 6
+		}
 	}
 	return DeliverOutcome{
 		RewardGold: reward,

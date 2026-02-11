@@ -32,6 +32,27 @@
       hx-swap="innerHTML">
       {{ template "players_inner" . }}
     </div>
+    <div id="institutions" class="card"
+      hx-get="/frag/institutions"
+      hx-trigger="every 5s"
+      hx-target="#institutions"
+      hx-swap="innerHTML">
+      {{ template "institutions_inner" . }}
+    </div>
+    <div id="intel" class="card"
+      hx-get="/frag/intel"
+      hx-trigger="every 5s[document.activeElement == null || !document.getElementById('intel') || !document.getElementById('intel').contains(document.activeElement)]"
+      hx-target="#intel"
+      hx-swap="innerHTML">
+      {{ template "intel_inner" . }}
+    </div>
+    <div id="ledger" class="card"
+      hx-get="/frag/ledger"
+      hx-trigger="every 5s"
+      hx-target="#ledger"
+      hx-swap="innerHTML">
+      {{ template "ledger_inner" . }}
+    </div>
     <div id="toast" class="toast">{{ .Toast }}</div>
   </div>
 </div>

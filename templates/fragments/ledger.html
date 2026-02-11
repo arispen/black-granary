@@ -1,0 +1,41 @@
+{{ define "ledger_inner" }}
+<h3>Ledger</h3>
+<form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:0;">
+  <input type="hidden" name="action" value="loan_offer">
+  <select name="target_id" aria-label="Borrower">
+    {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+  </select>
+  <input type="number" name="amount" min="1" value="5" style="width:80px;">
+  <button type="submit">Offer Loan</button>
+</form>
+<div class="muted" style="margin-top:8px;">Loans</div>
+<div class="events" style="max-height:150px;">
+  {{ range .Loans }}
+    <div class="event-line">
+      <div class="event-meta">{{ .ID }} · {{ .LenderName }} -> {{ .BorrowerName }} · due {{ .DueIn }} · {{ .Status }}</div>
+      <div>Remaining: {{ .Remaining }}g</div>
+      <div class="actions">
+        {{ if eq .Status "Offered" }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="loan_accept"><input type="hidden" name="loan_id" value="{{ .ID }}"><button class="secondary" type="submit">Accept</button></form>
+        {{ end }}
+        {{ if eq .Status "Active" }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="repay"><input type="hidden" name="loan_id" value="{{ .ID }}"><button class="secondary" type="submit">Repay</button></form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="default"><input type="hidden" name="loan_id" value="{{ .ID }}"><button class="warn" type="submit">Default</button></form>
+        {{ end }}
+      </div>
+    </div>
+  {{ else }}<div class="muted">No loans.</div>{{ end }}
+</div>
+<div class="muted" style="margin-top:8px;">Obligations</div>
+<div class="events" style="max-height:120px;">
+  {{ range .Obligations }}
+    <div class="event-line"><div class="event-meta">{{ .CreditorName }} <- {{ .DebtorName }} · {{ .Reason }} · sev {{ .Severity }} · due {{ .DueIn }} · {{ .Status }}</div></div>
+  {{ else }}<div class="muted">No obligations.</div>{{ end }}
+</div>
+{{ end }}
+
+{{ define "ledger_oob" }}
+<div id="ledger" hx-swap-oob="innerHTML" class="card">
+  {{ template "ledger_inner" . }}
+</div>
+{{ end }}

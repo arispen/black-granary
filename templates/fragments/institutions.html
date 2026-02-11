@@ -1,0 +1,49 @@
+{{ define "institutions_inner" }}
+<h3>Institutions</h3>
+<div class="muted">Tax {{ .Policies.TaxRatePct }}% · Permit {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
+<div class="contracts" style="margin-top:8px;">
+  {{ range .Seats }}
+    <div class="contract">
+      <div><strong>{{ .Name }}</strong> <span class="pill">{{ .InstitutionName }}</span></div>
+      <div class="meta">
+        <span>Holder: {{ .HolderName }}</span>
+        {{ if .IsElectionOpen }}<span>Election: {{ .ElectionWindowTicks }} ticks</span>{{ else }}<span>Tenure: {{ .TenureTicksLeft }} ticks</span>{{ end }}
+      </div>
+      <div class="actions">
+        {{ if .CanCampaign }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="campaign_seat">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button type="submit">Campaign</button>
+          </form>
+        {{ end }}
+        {{ if .CanChallenge }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="challenge_seat">
+            <input type="hidden" name="contract_id" value="{{ .ID }}">
+            <button class="secondary" type="submit">Challenge</button>
+          </form>
+        {{ end }}
+        {{ if .CanToggleTaxHigh }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="set_tax_high"><button class="secondary" type="submit">Tax 20%</button></form>
+        {{ end }}
+        {{ if .CanToggleTaxLow }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="set_tax_low"><button class="secondary" type="submit">Tax 5%</button></form>
+        {{ end }}
+        {{ if .CanTogglePermit }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_permit"><button class="secondary" type="submit">Permit</button></form>
+        {{ end }}
+        {{ if .CanToggleEmbargo }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">Embargo</button></form>
+        {{ end }}
+      </div>
+    </div>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "institutions_oob" }}
+<div id="institutions" hx-swap-oob="innerHTML" class="card">
+  {{ template "institutions_inner" . }}
+</div>
+{{ end }}

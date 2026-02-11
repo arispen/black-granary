@@ -220,8 +220,8 @@ func TestDeliverConsumesRumorAndAppliesBonus(t *testing.T) {
 	s.Players[p.ID] = p
 	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Fulfilled", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
 
-	base := computeDeliverOutcomeLocked(&Player{Rep: 0, Rumors: 0}, s.Contracts["c1"])
-	withRumor := computeDeliverOutcomeLocked(p, s.Contracts["c1"])
+	base := computeDeliverOutcomeLocked(s, &Player{Rep: 0, Rumors: 0}, s.Contracts["c1"])
+	withRumor := computeDeliverOutcomeLocked(s, p, s.Contracts["c1"])
 	if withRumor.RewardGold != base.RewardGold+rumorDeliverBonusGold {
 		t.Fatalf("rumor bonus should add %d gold, base=%d withRumor=%d", rumorDeliverBonusGold, base.RewardGold, withRumor.RewardGold)
 	}
@@ -413,15 +413,15 @@ func TestDeliverOutcomeRewardRoundingByStance(t *testing.T) {
 	c := &Contract{Type: "Emergency"}
 
 	c.Stance = contractStanceCareful
-	if got := computeDeliverOutcomeLocked(p, c).RewardGold; got != 22 {
+	if got := computeDeliverOutcomeLocked(nil, p, c).RewardGold; got != 22 {
 		t.Fatalf("careful reward = %d, want 22", got)
 	}
 	c.Stance = contractStanceFast
-	if got := computeDeliverOutcomeLocked(p, c).RewardGold; got != 27 {
+	if got := computeDeliverOutcomeLocked(nil, p, c).RewardGold; got != 27 {
 		t.Fatalf("fast reward = %d, want 27", got)
 	}
 	c.Stance = contractStanceQuiet
-	if got := computeDeliverOutcomeLocked(p, c).RewardGold; got != 20 {
+	if got := computeDeliverOutcomeLocked(nil, p, c).RewardGold; got != 20 {
 		t.Fatalf("quiet reward = %d, want 20", got)
 	}
 }
@@ -449,6 +449,7 @@ func TestDeliverHeatClampAtZero(t *testing.T) {
 
 func TestSmugglingExtraHeatStacksAfterStance(t *testing.T) {
 	outcome := computeDeliverOutcomeLocked(
+		nil,
 		&Player{Rep: 0},
 		&Contract{Type: "Smuggling", Stance: contractStanceFast},
 	)
@@ -484,5 +485,140 @@ func TestDeliverIdempotentDoesNotDoubleApply(t *testing.T) {
 	}
 	if p.CompletedContracts != completedAfterFirst {
 		t.Fatalf("second deliver should not increment completion, got %d", p.CompletedContracts)
+	}
+}
+
+func TestSeatElectionChoosesHighestRep(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	low := &Player{ID: "p1", Name: "Ash Crow (Guest)", Rep: 5, LastSeen: now}
+	high := &Player{ID: "p2", Name: "Bran Vale (Guest)", Rep: 30, LastSeen: now}
+	s.Players[low.ID] = low
+	s.Players[high.ID] = high
+	s.Seats["master_of_coin"].TenureTicksLeft = 1
+
+	runWorldTickLocked(s, now)
+	if s.Seats["master_of_coin"].ElectionWindowTicks == 0 {
+		t.Fatalf("expected election window to open after tenure expiry")
+	}
+
+	runWorldTickLocked(s, now.Add(time.Minute))
+	runWorldTickLocked(s, now.Add(2*time.Minute))
+	if got := s.Seats["master_of_coin"].HolderPlayerID; got != high.ID {
+		t.Fatalf("expected highest rep player to win election, got holder=%q", got)
+	}
+}
+
+func TestTaxPolicyChangesDeliveryOutcome(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+	s.Seats["master_of_coin"].HolderPlayerID = p.ID
+	s.Seats["master_of_coin"].HolderName = p.Name
+	c := &Contract{ID: "c1", Type: "Emergency", Stance: contractStanceCareful}
+
+	base := computeDeliverOutcomeLocked(s, p, c).RewardGold
+	handleActionLocked(s, p, now, "set_tax_high", "")
+	if s.Policies.TaxRatePct != 20 {
+		t.Fatalf("expected high tax to be applied")
+	}
+	afterTax := computeDeliverOutcomeLocked(s, p, c).RewardGold
+	if afterTax >= base {
+		t.Fatalf("expected high tax to reduce reward, base=%d after=%d", base, afterTax)
+	}
+}
+
+func TestEmbargoBlocksSmugglingAcceptUnlessHarborMaster(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Smuggling", DeadlineTicks: 3, Status: "Issued"}
+	s.Policies.SmugglingEmbargoTicks = 2
+
+	handleActionLocked(s, p, now, "accept", "c1")
+	if s.Contracts["c1"].Status != "Issued" {
+		t.Fatalf("smuggling should be blocked under embargo for non-holder")
+	}
+
+	s.Seats["harbor_master"].HolderPlayerID = p.ID
+	s.Seats["harbor_master"].HolderName = p.Name
+	handleActionLocked(s, p, now.Add(time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Accepted" {
+		t.Fatalf("harbor master should be able to bypass embargo")
+	}
+}
+
+func TestScenarioInformationAttackInstitutionResponseEconomicConsequence(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	attacker := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 15, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 5, LastSeen: now}
+	s.Players[attacker.ID] = attacker
+	s.Players[target.ID] = target
+	s.Seats["harbor_master"].HolderPlayerID = target.ID
+	s.Seats["harbor_master"].HolderName = target.Name
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
+
+	addEvidenceLocked(s, attacker, target, "corruption", 8, 5)
+	handleActionInputLocked(s, attacker, now, ActionInput{Action: "publish_evidence", TargetID: target.ID})
+
+	if !s.Policies.PermitRequiredHighRisk {
+		t.Fatalf("expected evidence publication to trigger permit policy sanction")
+	}
+	if s.Seats["harbor_master"].HolderPlayerID != "" {
+		t.Fatalf("sanction should remove target from harbor master seat")
+	}
+
+	handleActionLocked(s, target, now.Add(time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Issued" {
+		t.Fatalf("permit sanction should block target's emergency contract accept")
+	}
+}
+
+func TestScenarioCreditDefaultSanctionEmbargoSmugglingResponse(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	lender := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 50, Rep: 10, LastSeen: now}
+	borrower := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 1, Rep: 0, LastSeen: now}
+	smuggler := &Player{ID: "p3", Name: "Corin Reed (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[lender.ID] = lender
+	s.Players[borrower.ID] = borrower
+	s.Players[smuggler.ID] = smuggler
+
+	handleActionInputLocked(s, lender, now, ActionInput{Action: "loan_offer", TargetID: borrower.ID, Amount: 10})
+	var loanID string
+	for id := range s.Loans {
+		loanID = id
+	}
+	if loanID == "" {
+		t.Fatalf("expected loan offer to be created")
+	}
+	handleActionInputLocked(s, borrower, now.Add(time.Second), ActionInput{Action: "loan_accept", LoanID: loanID})
+	handleActionInputLocked(s, borrower, now.Add(2*time.Second), ActionInput{Action: "default", LoanID: loanID})
+
+	if s.Policies.SmugglingEmbargoTicks <= 0 {
+		t.Fatalf("default should trigger embargo/sanction window")
+	}
+
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Smuggling", DeadlineTicks: 3, Status: "Issued"}
+	handleActionLocked(s, borrower, now.Add(3*time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Issued" {
+		t.Fatalf("borrower should be blocked by embargo from smuggling accept")
+	}
+
+	s.Seats["harbor_master"].HolderPlayerID = smuggler.ID
+	s.Seats["harbor_master"].HolderName = smuggler.Name
+	handleActionLocked(s, smuggler, now.Add(4*time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Accepted" {
+		t.Fatalf("harbor master should perform smuggling response under embargo")
+	}
+
+	withEmbargo := computeDeliverOutcomeLocked(s, smuggler, s.Contracts["c1"]).RewardGold
+	s.Policies.SmugglingEmbargoTicks = 0
+	noEmbargo := computeDeliverOutcomeLocked(s, smuggler, s.Contracts["c1"]).RewardGold
+	if withEmbargo <= noEmbargo {
+		t.Fatalf("embargo should increase smuggling value response, with=%d without=%d", withEmbargo, noEmbargo)
 	}
 }
