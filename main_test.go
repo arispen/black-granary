@@ -149,6 +149,72 @@ func TestInvestigateCooldownByTicks(t *testing.T) {
 	}
 }
 
+func TestCrisisResponseResolvesWithRewards(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 10, Grain: 4, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	def, ok := crisisDefinitionByType("plague")
+	if !ok {
+		t.Fatalf("expected plague crisis definition")
+	}
+	s.ActiveCrisis = &Crisis{
+		Type:        def.Type,
+		Name:        def.Name,
+		Description: def.Description,
+		Severity:    def.BaseSeverity,
+		TicksLeft:   1,
+		TotalTicks:  def.DurationTicks,
+	}
+
+	handleActionLocked(s, p, now, "respond_crisis", "")
+
+	if s.ActiveCrisis != nil {
+		t.Fatalf("expected crisis to resolve after response")
+	}
+	if p.Gold != 10-def.GoldCost {
+		t.Fatalf("expected gold reduced by crisis cost, got %d", p.Gold)
+	}
+	if p.Grain != 4-def.GrainCost {
+		t.Fatalf("expected grain reduced by crisis cost, got %d", p.Grain)
+	}
+	if p.Rep != def.ResolveRepDelta {
+		t.Fatalf("expected rep delta %d, got %d", def.ResolveRepDelta, p.Rep)
+	}
+}
+
+func TestCrisisTickAppliesPressure(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	def, ok := crisisDefinitionByType("fire")
+	if !ok {
+		t.Fatalf("expected fire crisis definition")
+	}
+	s.ActiveCrisis = &Crisis{
+		Type:        def.Type,
+		Name:        def.Name,
+		Description: def.Description,
+		Severity:    2,
+		TicksLeft:   2,
+		TotalTicks:  2,
+	}
+	startGrain := s.World.GrainSupply
+	startUnrest := s.World.UnrestValue
+
+	processCrisisTickLocked(s, now)
+
+	if s.World.GrainSupply >= startGrain {
+		t.Fatalf("expected crisis to reduce grain supply")
+	}
+	if s.World.UnrestValue <= startUnrest {
+		t.Fatalf("expected crisis to raise unrest")
+	}
+	if s.ActiveCrisis == nil || s.ActiveCrisis.TicksLeft != 1 {
+		t.Fatalf("expected crisis tick to decrement ticks left")
+	}
+}
+
 func TestWhisperSuccessIncrementsRumors(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

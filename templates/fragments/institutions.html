@@ -31,10 +31,10 @@
           <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="set_tax_low"><button class="secondary" type="submit">Tax 5%</button></form>
         {{ end }}
         {{ if .CanTogglePermit }}
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_permit"><button class="secondary" type="submit">Toggle Permit</button></form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_permit"><button class="secondary" type="submit">{{ if $.Policies.PermitRequiredHighRisk }}Open Permits{{ else }}Require Permits{{ end }}</button></form>
         {{ end }}
         {{ if .CanToggleEmbargo }}
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">Toggle Embargo</button></form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">{{ if gt $.Policies.SmugglingEmbargoTicks 0 }}Lift Embargo{{ else }}Impose Embargo{{ end }}</button></form>
         {{ end }}
       </div>
     </div>

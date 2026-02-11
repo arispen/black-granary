@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.9.0
+- Added citywide crisis events (plague, fire, collapse) that pressure unrest and grain supplies.
+- Crisis Watch shows active emergencies and lets players fund response actions.
+- Permit/embargo toggles now display clear action labels, and impact counters are clarified.
+
 ## 0.8.0
 - Added a Diplomacy panel for private missives with courier notifications.
 - New diplomacy inbox keeps messages visible only to sender and recipient.

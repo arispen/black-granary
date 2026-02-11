@@ -233,6 +233,33 @@ type ProjectDefinition struct {
 	HeatDelta     int
 }
 
+type Crisis struct {
+	Type        string
+	Name        string
+	Description string
+	Severity    int
+	TicksLeft   int
+	TotalTicks  int
+	Mitigated   bool
+}
+
+type CrisisDefinition struct {
+	Type               string
+	Name               string
+	Description        string
+	DurationTicks      int
+	BaseSeverity       int
+	GoldCost           int
+	GrainCost          int
+	ResponseLabel      string
+	TickUnrestDelta    int
+	TickGrainDelta     int
+	ResolveRepDelta    int
+	ResolveUnrestDelta int
+	FailureUnrestDelta int
+	FailureGrainDelta  int
+}
+
 type Store struct {
 	mu sync.Mutex
 
@@ -247,6 +274,7 @@ type Store struct {
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
 	Projects     map[string]*Project
+	ActiveCrisis *Crisis
 
 	Events   []Event
 	Chat     []ChatMessage
@@ -433,6 +461,18 @@ type ProjectOption struct {
 	DisabledReason string
 }
 
+type CrisisView struct {
+	Name                   string
+	Description            string
+	Severity               int
+	TicksLeft              int
+	TotalTicks             int
+	ResponseLabel          string
+	ResponseCost           string
+	ResponseDisabled       bool
+	ResponseDisabledReason string
+}
+
 type PlayerOption struct {
 	ID   string
 	Name string
@@ -485,6 +525,7 @@ type PageData struct {
 	Obligations          []ObligationView
 	Projects             []ProjectView
 	ProjectOptions       []ProjectOption
+	Crisis               *CrisisView
 	PlayerOptions        []PlayerOption
 	TickStatus           string
 }
@@ -841,6 +882,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		online := onlinePlayersLocked(store, time.Now().UTC())
 		_, _ = fmt.Fprintf(w, "<h2>World</h2><pre>%+v</pre>", store.World)
+		_, _ = fmt.Fprintf(w, "<h2>Active Crisis</h2><pre>%+v</pre>", store.ActiveCrisis)
 		_, _ = fmt.Fprintf(w, "<h2>Active Contracts</h2><pre>")
 		for _, c := range sortedContractsLocked(store) {
 			if c.Status == "Issued" || c.Status == "Accepted" {
@@ -914,6 +956,7 @@ func newStore() *Store {
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
 		Projects:          map[string]*Project{},
+		ActiveCrisis:      nil,
 		Events:            []Event{},
 		Chat:              []ChatMessage{},
 		Messages:          []DiplomaticMessage{},
@@ -959,6 +1002,7 @@ func resetStoreLocked(s *Store) {
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
 	s.Projects = map[string]*Project{}
+	s.ActiveCrisis = nil
 	s.Events = []Event{}
 	s.Chat = []ChatMessage{}
 	s.Messages = []DiplomaticMessage{}
@@ -1124,6 +1168,8 @@ func runWorldTickLocked(store *Store, now time.Time) {
 			addEventLocked(store, Event{Type: "Contract", Severity: 3, Text: "A contract has failed, raising tension in the city.", At: now})
 		}
 	}
+
+	processCrisisTickLocked(store, now)
 
 	baseMultiplier := map[string]float64{"Stable": 1.0, "Tight": 1.5, "Scarce": 2.0, "Critical": 3.0}[w.GrainTier]
 	effectiveMultiplier := baseMultiplier
@@ -1413,6 +1459,108 @@ func processProjectTickLocked(store *Store, now time.Time) {
 			})
 		}
 		delete(store.Projects, id)
+	}
+}
+
+func startCrisisLocked(store *Store, def CrisisDefinition, now time.Time) {
+	store.ActiveCrisis = &Crisis{
+		Type:        def.Type,
+		Name:        def.Name,
+		Description: def.Description,
+		Severity:    def.BaseSeverity,
+		TicksLeft:   def.DurationTicks,
+		TotalTicks:  def.DurationTicks,
+	}
+	addEventLocked(store, Event{
+		Type:     "Crisis",
+		Severity: 3,
+		Text:     fmt.Sprintf("%s erupts. %s", def.Name, def.Description),
+		At:       now,
+	})
+}
+
+func maybeStartCrisisLocked(store *Store, now time.Time) {
+	if store.ActiveCrisis != nil {
+		return
+	}
+	chance := 4
+	if store.World.UnrestTier == "Rioting" || store.World.UnrestTier == "Unstable" {
+		chance += 8
+	}
+	if store.World.GrainTier == "Critical" || store.World.GrainTier == "Scarce" {
+		chance += 6
+	}
+	if store.rng.Intn(100) >= chance {
+		return
+	}
+	defs := crisisDefinitions()
+	if len(defs) == 0 {
+		return
+	}
+	def := defs[store.rng.Intn(len(defs))]
+	startCrisisLocked(store, def, now)
+}
+
+func resolveCrisisLocked(store *Store, def CrisisDefinition, now time.Time, mitigated bool, resolver *Player) {
+	if mitigated {
+		if resolver != nil {
+			addEventLocked(store, Event{
+				Type:     "Crisis",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] contains %s.", resolver.Name, def.Name),
+				At:       now,
+			})
+		} else {
+			addEventLocked(store, Event{
+				Type:     "Crisis",
+				Severity: 2,
+				Text:     fmt.Sprintf("%s abates after emergency measures.", def.Name),
+				At:       now,
+			})
+		}
+		store.ActiveCrisis = nil
+		return
+	}
+	if def.FailureUnrestDelta != 0 {
+		store.World.UnrestValue = clampInt(store.World.UnrestValue+def.FailureUnrestDelta, 0, 100)
+		store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+	}
+	if def.FailureGrainDelta != 0 {
+		applyGrainSupplyDeltaLocked(store, now, def.FailureGrainDelta)
+	}
+	addEventLocked(store, Event{
+		Type:     "Crisis",
+		Severity: 4,
+		Text:     fmt.Sprintf("%s burns out of control; the city reels.", def.Name),
+		At:       now,
+	})
+	store.ActiveCrisis = nil
+}
+
+func processCrisisTickLocked(store *Store, now time.Time) {
+	if store.ActiveCrisis == nil {
+		maybeStartCrisisLocked(store, now)
+		return
+	}
+	crisis := store.ActiveCrisis
+	def, ok := crisisDefinitionByType(crisis.Type)
+	if !ok {
+		store.ActiveCrisis = nil
+		return
+	}
+	if crisis.TicksLeft <= 0 {
+		resolveCrisisLocked(store, def, now, crisis.Mitigated, nil)
+		return
+	}
+	if def.TickUnrestDelta != 0 {
+		store.World.UnrestValue += def.TickUnrestDelta * maxInt(1, crisis.Severity)
+	}
+	if def.TickGrainDelta != 0 {
+		applyGrainSupplyDeltaLocked(store, now, def.TickGrainDelta*maxInt(1, crisis.Severity))
+	}
+	crisis.TicksLeft--
+	if crisis.TicksLeft <= 0 {
+		resolveCrisisLocked(store, def, now, crisis.Mitigated, nil)
 	}
 }
 
@@ -2207,6 +2355,54 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			At:       now,
 		})
 		setToastLocked(store, p.ID, fmt.Sprintf("%s funded.", def.Name))
+	case "respond_crisis":
+		if store.ActiveCrisis == nil {
+			setToastLocked(store, p.ID, "No active crisis to address.")
+			return
+		}
+		def, ok := crisisDefinitionByType(store.ActiveCrisis.Type)
+		if !ok {
+			setToastLocked(store, p.ID, "Crisis details unavailable.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		if p.Gold < def.GoldCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to mobilize a response.", def.GoldCost))
+			return
+		}
+		if def.GrainCost > 0 && p.Grain < def.GrainCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %d sacks to mobilize a response.", def.GrainCost))
+			return
+		}
+		p.Gold -= def.GoldCost
+		if def.GrainCost > 0 {
+			p.Grain -= def.GrainCost
+		}
+		store.ActiveCrisis.Mitigated = true
+		if store.ActiveCrisis.Severity > 1 {
+			store.ActiveCrisis.Severity--
+		}
+		store.ActiveCrisis.TicksLeft = maxInt(0, store.ActiveCrisis.TicksLeft-1)
+		if def.ResolveRepDelta != 0 {
+			p.Rep = clampInt(p.Rep+def.ResolveRepDelta, -100, 100)
+		}
+		if def.ResolveUnrestDelta != 0 {
+			store.World.UnrestValue = clampInt(store.World.UnrestValue-def.ResolveUnrestDelta, 0, 100)
+			store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+		}
+		addEventLocked(store, Event{
+			Type:     "Crisis",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] mobilizes a response to %s.", p.Name, def.Name),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, "Response deployed.")
+		if store.ActiveCrisis.TicksLeft <= 0 {
+			resolveCrisisLocked(store, def, now, true, p)
+		}
 	case "invoke_rite":
 		p.RiteImmunityTicks = 3
 		p.Rep = clampInt(p.Rep+2, -100, 100)
@@ -3201,6 +3397,42 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		})
 	}
 
+	var crisisView *CrisisView
+	if store.ActiveCrisis != nil {
+		if def, ok := crisisDefinitionByType(store.ActiveCrisis.Type); ok {
+			costParts := []string{}
+			if def.GoldCost > 0 {
+				costParts = append(costParts, fmt.Sprintf("%dg", def.GoldCost))
+			}
+			if def.GrainCost > 0 {
+				costParts = append(costParts, fmt.Sprintf("%d sacks", def.GrainCost))
+			}
+			costLabel := "Cost: none"
+			if len(costParts) > 0 {
+				costLabel = fmt.Sprintf("Cost: %s", strings.Join(costParts, " · "))
+			}
+			disabledReason := ""
+			if highImpactRemaining == 0 {
+				disabledReason = "Daily high-impact cap reached."
+			} else if p.Gold < def.GoldCost {
+				disabledReason = fmt.Sprintf("Need %dg.", def.GoldCost)
+			} else if def.GrainCost > 0 && p.Grain < def.GrainCost {
+				disabledReason = fmt.Sprintf("Need %d sacks.", def.GrainCost)
+			}
+			crisisView = &CrisisView{
+				Name:                   def.Name,
+				Description:            def.Description,
+				Severity:               store.ActiveCrisis.Severity,
+				TicksLeft:              store.ActiveCrisis.TicksLeft,
+				TotalTicks:             store.ActiveCrisis.TotalTicks,
+				ResponseLabel:          def.ResponseLabel,
+				ResponseCost:           costLabel,
+				ResponseDisabled:       disabledReason != "",
+				ResponseDisabledReason: disabledReason,
+			}
+		}
+	}
+
 	marketBase := marketBasePrice(store.World.GrainTier)
 	marketBuy := marketBuyPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
 	marketSell := marketSellPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
@@ -3268,6 +3500,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Obligations:          obligations,
 		Projects:             projects,
 		ProjectOptions:       projectOptions,
+		Crisis:               crisisView,
 		PlayerOptions:        playerOptions,
 		TickStatus:           tickStatus,
 	}
@@ -3605,6 +3838,68 @@ func projectEffectNote(def ProjectDefinition) string {
 		return "no clear effect"
 	}
 	return strings.Join(parts, ", ")
+}
+
+func crisisDefinitions() []CrisisDefinition {
+	return []CrisisDefinition{
+		{
+			Type:               "plague",
+			Name:               "Grey Plague",
+			Description:        "Fever grips the wards; healers plead for quarantine supplies.",
+			DurationTicks:      4,
+			BaseSeverity:       2,
+			GoldCost:           4,
+			GrainCost:          1,
+			ResponseLabel:      "Fund Quarantine",
+			TickUnrestDelta:    3,
+			TickGrainDelta:     -4,
+			ResolveRepDelta:    1,
+			ResolveUnrestDelta: 3,
+			FailureUnrestDelta: 6,
+			FailureGrainDelta:  -12,
+		},
+		{
+			Type:               "fire",
+			Name:               "Warehouse Inferno",
+			Description:        "Docks blaze; smoke chokes the market lanes.",
+			DurationTicks:      3,
+			BaseSeverity:       2,
+			GoldCost:           3,
+			GrainCost:          2,
+			ResponseLabel:      "Deploy Bucket Brigade",
+			TickUnrestDelta:    2,
+			TickGrainDelta:     -8,
+			ResolveRepDelta:    1,
+			ResolveUnrestDelta: 2,
+			FailureUnrestDelta: 5,
+			FailureGrainDelta:  -15,
+		},
+		{
+			Type:               "collapse",
+			Name:               "Canal Collapse",
+			Description:        "A canal wall fails; cargo routes grind to a halt.",
+			DurationTicks:      3,
+			BaseSeverity:       3,
+			GoldCost:           6,
+			GrainCost:          0,
+			ResponseLabel:      "Hire Masons",
+			TickUnrestDelta:    3,
+			TickGrainDelta:     -5,
+			ResolveRepDelta:    2,
+			ResolveUnrestDelta: 3,
+			FailureUnrestDelta: 7,
+			FailureGrainDelta:  -10,
+		},
+	}
+}
+
+func crisisDefinitionByType(crisisType string) (CrisisDefinition, bool) {
+	for _, def := range crisisDefinitions() {
+		if def.Type == crisisType {
+			return def, true
+		}
+	}
+	return CrisisDefinition{}, false
 }
 
 func normalizeContractStance(raw string) string {

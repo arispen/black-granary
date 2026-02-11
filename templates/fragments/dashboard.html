@@ -8,15 +8,34 @@
     <div class="card"><strong>You</strong><br>{{ .Player.Gold }}g · {{ .PlayerTitle }}</div>
   </div>
 </div>
-<div class="card">
+<div class="card" style="margin-top:12px;">
+  <h3>Crisis Watch</h3>
+  {{ if .Crisis }}
+    <div><strong>{{ .Crisis.Name }}</strong> <span class="pill">Severity {{ .Crisis.Severity }}</span></div>
+    <div class="muted" style="margin-top:6px;">{{ .Crisis.Description }}</div>
+    <div class="muted" style="margin-top:6px;">Ticks left: {{ .Crisis.TicksLeft }} · {{ .Crisis.ResponseCost }}</div>
+    {{ if .Crisis.ResponseDisabledReason }}
+      <div class="muted" style="margin-top:6px;">{{ .Crisis.ResponseDisabledReason }}</div>
+    {{ end }}
+    <div class="actions">
+      <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+        <input type="hidden" name="action" value="respond_crisis">
+        <button class="secondary" type="submit" {{ if .Crisis.ResponseDisabled }}disabled{{ end }}>{{ .Crisis.ResponseLabel }}</button>
+      </form>
+    </div>
+  {{ else }}
+    <div class="muted">No citywide crises reported.</div>
+  {{ end }}
+</div>
+<div class="card" style="margin-top:12px;">
   <h3>Your Standing in Black Granary</h3>
   <div class="status-grid">
     <div class="card"><strong>Reputation</strong><br>{{ .Standing.ReputationValue }} · {{ .Standing.ReputationLabel }}</div>
     <div class="card"><strong>Heat</strong><br>{{ .Standing.HeatValue }} · {{ .Standing.HeatLabel }}</div>
     <div class="card"><strong>Wealth</strong><br>{{ .Standing.WealthGold }}g</div>
     <div class="card"><strong>Stockpile</strong><br>{{ .Standing.GrainStockpile }} sacks</div>
-    <div class="card"><strong>Impact</strong><br>Today {{ .Standing.CompletedToday }}</div>
-    <div class="card"><strong>Impact</strong><br>Lifetime {{ .Standing.CompletedTotal }}</div>
+    <div class="card"><strong>Impact Today</strong><br>{{ .Standing.CompletedToday }}</div>
+    <div class="card"><strong>Impact Total</strong><br>{{ .Standing.CompletedTotal }}</div>
     <div class="card"><strong>Rumors</strong><br>{{ .Standing.Rumors }}</div>
     <div class="card"><strong>High Impact</strong><br>{{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
   </div>
@@ -66,13 +85,13 @@
           {{ if .CanTogglePermit }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="toggle_permit">
-              <button class="secondary" type="submit">Toggle Permit</button>
+              <button class="secondary" type="submit">{{ if $.Policies.PermitRequiredHighRisk }}Open Permits{{ else }}Require Permits{{ end }}</button>
             </form>
           {{ end }}
           {{ if .CanToggleEmbargo }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="toggle_embargo">
-              <button class="secondary" type="submit">Toggle Embargo</button>
+              <button class="secondary" type="submit">{{ if gt $.Policies.SmugglingEmbargoTicks 0 }}Lift Embargo{{ else }}Impose Embargo{{ end }}</button>
             </form>
           {{ end }}
         </div>
