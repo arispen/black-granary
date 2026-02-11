@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.8.0
+- Added a Diplomacy panel for private missives with courier notifications.
+- New diplomacy inbox keeps messages visible only to sender and recipient.
+- Institutions panel now labels permit/embargo toggles consistently.
+
 ## 0.7.0
 - Added public works projects with time-bound effects on grain, unrest, reputation, and heat.
 - Institutions panel now lists active projects and funding options.

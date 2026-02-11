@@ -31,10 +31,10 @@
           <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="set_tax_low"><button class="secondary" type="submit">Tax 5%</button></form>
         {{ end }}
         {{ if .CanTogglePermit }}
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_permit"><button class="secondary" type="submit">Permit</button></form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_permit"><button class="secondary" type="submit">Toggle Permit</button></form>
         {{ end }}
         {{ if .CanToggleEmbargo }}
-          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">Embargo</button></form>
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML"><input type="hidden" name="action" value="toggle_embargo"><button class="secondary" type="submit">Toggle Embargo</button></form>
         {{ end }}
       </div>
     </div>

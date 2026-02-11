@@ -86,6 +86,7 @@ func TestFragDashboardIncludesOOBUpdates(t *testing.T) {
 		`id="realm-header" hx-swap-oob="outerHTML"`,
 		`id="event-log" hx-swap-oob="innerHTML"`,
 		`id="players" hx-swap-oob="innerHTML"`,
+		`id="diplomacy" hx-swap-oob="innerHTML"`,
 		`id="institutions" hx-swap-oob="innerHTML"`,
 		`id="intel" hx-swap-oob="innerHTML"`,
 		`id="ledger" hx-swap-oob="innerHTML"`,
@@ -182,6 +183,11 @@ func TestFragEndpointsReturnInnerContentForPolling(t *testing.T) {
 		t.Fatalf("/frag/chat should return inner content only")
 	}
 
+	diplomacy := doReq(t, mux, http.MethodGet, "/frag/diplomacy", nil, "", "127.0.0.1:1111").Body.String()
+	if strings.Contains(diplomacy, `id="diplomacy"`) {
+		t.Fatalf("/frag/diplomacy should return inner content only")
+	}
+
 	players := doReq(t, mux, http.MethodGet, "/frag/players", nil, "", "127.0.0.1:1111").Body.String()
 	if strings.Contains(players, `id="players"`) {
 		t.Fatalf("/frag/players should return inner content only")
@@ -263,6 +269,39 @@ func TestWhisperPrivacyOnFragChat(t *testing.T) {
 	}
 	if !strings.Contains(bodyP3, "global hello") {
 		t.Fatalf("all players should see global chat")
+	}
+}
+
+func TestDiplomacyMessageDeliveryPrivacy(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	s.Players["p1"] = &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players["p2"] = &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players["p3"] = &Player{ID: "p3", Name: "Corin Reed (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.mu.Unlock()
+
+	form := url.Values{
+		"target_id": {"p2"},
+		"subject":   {"Trade Offer"},
+		"body":      {"Meet at dawn by the granary gate."},
+	}
+	resp := doReq(t, mux, http.MethodPost, "/message", form, "p1", "127.0.0.1:1111")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("POST /message status=%d", resp.Code)
+	}
+
+	bodyP2 := doReq(t, mux, http.MethodGet, "/frag/diplomacy", nil, "p2", "127.0.0.1:1111").Body.String()
+	if !strings.Contains(bodyP2, "Meet at dawn by the granary gate.") {
+		t.Fatalf("recipient should see message")
+	}
+
+	bodyP3 := doReq(t, mux, http.MethodGet, "/frag/diplomacy", nil, "p3", "127.0.0.1:1111").Body.String()
+	if strings.Contains(bodyP3, "Meet at dawn by the granary gate.") {
+		t.Fatalf("non recipient should not see message")
 	}
 }
 

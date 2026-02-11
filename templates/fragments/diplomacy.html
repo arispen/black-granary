@@ -1,0 +1,39 @@
+{{ define "diplomacy_inner" }}
+<h3>Diplomacy</h3>
+{{ if .HasOtherPlayers }}
+  <form class="diplomacy-form" hx-post="/message" hx-target="#dashboard" hx-swap="innerHTML">
+    <select name="target_id" aria-label="Diplomacy target">
+      {{ range .PlayerOptions }}<option value="{{ .ID }}" {{ if eq $.MessageDraftTargetID .ID }}selected{{ end }}>{{ .Name }}</option>{{ end }}
+    </select>
+    <input type="text" name="subject" value="{{ .MessageDraftSubject }}" placeholder="Subject" maxlength="80" autocomplete="off">
+    <textarea name="body" rows="3" placeholder="Message" maxlength="260">{{ .MessageDraftBody }}</textarea>
+    <button type="submit">Send Message</button>
+  </form>
+{{ else }}
+  <div class="muted">No other players to contact.</div>
+{{ end }}
+<div class="muted" style="margin-top:8px;">Recent missives</div>
+<div class="events" style="max-height:200px;">
+  {{ range .Messages }}
+    <div class="event-line">
+      <div class="event-meta">{{ .At }} · {{ if eq .Direction "Sent" }}to {{ .ToName }}{{ else }}from {{ .FromName }}{{ end }} · {{ .Direction }}</div>
+      <div><strong>{{ .Subject }}</strong></div>
+      <div>{{ .Body }}</div>
+    </div>
+  {{ else }}
+    <div class="muted">No messages delivered yet.</div>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "diplomacy" }}
+<div id="diplomacy" class="card">
+  {{ template "diplomacy_inner" . }}
+</div>
+{{ end }}
+
+{{ define "diplomacy_oob" }}
+<div id="diplomacy" hx-swap-oob="innerHTML" class="card">
+  {{ template "diplomacy_inner" . }}
+</div>
+{{ end }}

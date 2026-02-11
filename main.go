@@ -23,12 +23,15 @@ const (
 	cookieName                  = "pid"
 	maxEvents                   = 300
 	maxChat                     = 200
+	maxDiplomacyMessages        = 200
 	maxVisibleContracts         = 12
+	maxVisibleMessages          = 20
 	onlineWindow                = 60 * time.Second
 	inactiveWindow              = 120 * time.Second
 	actionCooldown              = 2 * time.Second
 	deliverCooldown             = 10 * time.Second
 	chatCooldown                = 2 * time.Second
+	messageCooldown             = 5 * time.Second
 	adminToken                  = "DEV"
 	serverAddr                  = ":8080"
 	templateRoot                = "templates"
@@ -53,6 +56,8 @@ const (
 	supplyContractDeadlineTicks = 3
 	obligationDueTicks          = 3
 	projectMaxActive            = 4
+	messageSubjectMax           = 80
+	messageBodyMax              = 260
 )
 
 type WorldState struct {
@@ -121,6 +126,17 @@ type ChatMessage struct {
 	Text         string
 	At           time.Time
 	Kind         string
+}
+
+type DiplomaticMessage struct {
+	ID           int64
+	FromPlayerID string
+	FromName     string
+	ToPlayerID   string
+	ToName       string
+	Subject      string
+	Body         string
+	At           time.Time
 }
 
 type Institution struct {
@@ -232,12 +248,14 @@ type Store struct {
 	Obligations  map[string]*Obligation
 	Projects     map[string]*Project
 
-	Events []Event
-	Chat   []ChatMessage
+	Events   []Event
+	Chat     []ChatMessage
+	Messages []DiplomaticMessage
 
 	NextEventID      int64
 	NextContractID   int64
 	NextChatID       int64
+	NextMessageID    int64
 	NextRumorID      int64
 	NextEvidenceID   int64
 	NextLoanID       int64
@@ -250,6 +268,7 @@ type Store struct {
 	TickCount         int64
 
 	LastChatAt        map[string]time.Time
+	LastMessageAt     map[string]time.Time
 	LastActionAt      map[string]time.Time
 	LastDeliverAt     map[string]time.Time
 	LastInvestigateAt map[string]int64
@@ -323,6 +342,15 @@ type ChatView struct {
 	ToName    string
 	Text      string
 	Kind      string
+	At        string
+}
+
+type MessageView struct {
+	FromName  string
+	ToName    string
+	Subject   string
+	Body      string
+	Direction string
 	At        string
 }
 
@@ -441,6 +469,10 @@ type PageData struct {
 	Players              []PlayerSummary
 	Chat                 []ChatView
 	ChatDraft            string
+	Messages             []MessageView
+	MessageDraftSubject  string
+	MessageDraftBody     string
+	MessageDraftTargetID string
 	Toast                string
 	AcceptedCount        int
 	VisibleContractN     int
@@ -546,6 +578,18 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "chat_inner", buildPageDataLocked(store, p.ID, false))
+	})
+
+	mux.HandleFunc("/frag/diplomacy", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		p := ensurePlayerLocked(store, w, r)
+		p.LastSeen = time.Now().UTC()
+		renderPage(w, tmpl, "diplomacy_inner", buildPageDataLocked(store, p.ID, false))
 	})
 
 	mux.HandleFunc("/frag/players", func(w http.ResponseWriter, r *http.Request) {
@@ -698,6 +742,80 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		renderChatResponse(w, tmpl, data, true)
 	})
 
+	mux.HandleFunc("/message", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+
+		store.mu.Lock()
+		defer store.mu.Unlock()
+
+		p := ensurePlayerLocked(store, w, r)
+		now := time.Now().UTC()
+		p.LastSeen = now
+
+		targetID := strings.TrimSpace(r.FormValue("target_id"))
+		subject := strings.TrimSpace(r.FormValue("subject"))
+		body := strings.TrimSpace(r.FormValue("body"))
+
+		data := buildPageDataLocked(store, p.ID, true)
+		data.MessageDraftTargetID = targetID
+		data.MessageDraftSubject = subject
+		data.MessageDraftBody = body
+
+		if tooSoon(store.LastMessageAt[p.ID], now, messageCooldown) {
+			setToastLocked(store, p.ID, "Couriers need more time to return.")
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+
+		if targetID == "" {
+			setToastLocked(store, p.ID, "Choose a recipient.")
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+		target := store.Players[targetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "That recipient is unavailable.")
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+		if subject == "" || body == "" {
+			setToastLocked(store, p.ID, "Subject and message are required.")
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+		if len(subject) > messageSubjectMax {
+			setToastLocked(store, p.ID, fmt.Sprintf("Subject too long (max %d).", messageSubjectMax))
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+		if len(body) > messageBodyMax {
+			setToastLocked(store, p.ID, fmt.Sprintf("Message too long (max %d).", messageBodyMax))
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
+
+		store.LastMessageAt[p.ID] = now
+		addDiplomacyMessageLocked(store, DiplomaticMessage{
+			FromPlayerID: p.ID,
+			FromName:     p.Name,
+			ToPlayerID:   target.ID,
+			ToName:       target.Name,
+			Subject:      subject,
+			Body:         body,
+			At:           now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("Courier dispatched to %s.", target.Name))
+		setToastLocked(store, target.ID, fmt.Sprintf("A courier arrives from %s.", p.Name))
+		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, true), false)
+	})
+
 	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -798,10 +916,12 @@ func newStore() *Store {
 		Projects:          map[string]*Project{},
 		Events:            []Event{},
 		Chat:              []ChatMessage{},
+		Messages:          []DiplomaticMessage{},
 		LastDailyTickDate: "",
 		LastTickAt:        now,
 		TickEvery:         60 * time.Second,
 		LastChatAt:        map[string]time.Time{},
+		LastMessageAt:     map[string]time.Time{},
 		LastActionAt:      map[string]time.Time{},
 		LastDeliverAt:     map[string]time.Time{},
 		LastInvestigateAt: map[string]int64{},
@@ -841,14 +961,17 @@ func resetStoreLocked(s *Store) {
 	s.Projects = map[string]*Project{}
 	s.Events = []Event{}
 	s.Chat = []ChatMessage{}
+	s.Messages = []DiplomaticMessage{}
 	s.NextEventID = 0
 	s.NextContractID = 0
 	s.NextChatID = 0
+	s.NextMessageID = 0
 	s.NextProjectID = 0
 	s.LastDailyTickDate = ""
 	s.LastTickAt = now
 	s.TickCount = 0
 	s.LastChatAt = map[string]time.Time{}
+	s.LastMessageAt = map[string]time.Time{}
 	s.LastActionAt = map[string]time.Time{}
 	s.LastDeliverAt = map[string]time.Time{}
 	s.LastInvestigateAt = map[string]int64{}
@@ -2415,6 +2538,18 @@ func addChatLocked(store *Store, msg ChatMessage) {
 	}
 }
 
+func addDiplomacyMessageLocked(store *Store, msg DiplomaticMessage) {
+	store.NextMessageID++
+	msg.ID = store.NextMessageID
+	if msg.At.IsZero() {
+		msg.At = time.Now().UTC()
+	}
+	store.Messages = append(store.Messages, msg)
+	if len(store.Messages) > maxDiplomacyMessages {
+		store.Messages = store.Messages[len(store.Messages)-maxDiplomacyMessages:]
+	}
+}
+
 func issueContractLocked(store *Store, ctype string, deadline int) {
 	store.NextContractID++
 	id := fmt.Sprintf("c-%d", store.NextContractID)
@@ -2833,6 +2968,28 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		chat = chat[len(chat)-80:]
 	}
 
+	messages := []MessageView{}
+	for _, m := range store.Messages {
+		if m.FromPlayerID != p.ID && m.ToPlayerID != p.ID {
+			continue
+		}
+		direction := "Received"
+		if m.FromPlayerID == p.ID {
+			direction = "Sent"
+		}
+		messages = append(messages, MessageView{
+			FromName:  m.FromName,
+			ToName:    m.ToName,
+			Subject:   m.Subject,
+			Body:      m.Body,
+			Direction: direction,
+			At:        m.At.Format("15:04:05"),
+		})
+	}
+	if len(messages) > maxVisibleMessages {
+		messages = messages[len(messages)-maxVisibleMessages:]
+	}
+
 	seatOrder := []string{"harbor_master", "master_of_coin", "high_curate"}
 	seats := make([]SeatView, 0, len(seatOrder))
 	for _, seatID := range seatOrder {
@@ -3098,6 +3255,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Events:               events,
 		Players:              players,
 		Chat:                 chat,
+		Messages:             messages,
 		Toast:                toast,
 		AcceptedCount:        playerAcceptedCountLocked(store, playerID),
 		VisibleContractN:     len(contracts),
@@ -3153,6 +3311,7 @@ func renderActionLikeResponse(w http.ResponseWriter, tmpl *template.Template, da
 	_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "players_oob", data)
+	_ = tmpl.ExecuteTemplate(w, "diplomacy_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
 	_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)
@@ -3173,6 +3332,7 @@ func renderChatResponse(w http.ResponseWriter, tmpl *template.Template, data Pag
 		_ = tmpl.ExecuteTemplate(w, "header_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "events_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "players_oob", data)
+		_ = tmpl.ExecuteTemplate(w, "diplomacy_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "institutions_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "intel_oob", data)
 		_ = tmpl.ExecuteTemplate(w, "ledger_oob", data)

@@ -25,6 +25,13 @@
       hx-swap="innerHTML">
       {{ template "chat_inner" . }}
     </div>
+    <div id="diplomacy" class="card"
+      hx-get="/frag/diplomacy"
+      hx-trigger="every 5s[document.activeElement == null || !document.getElementById('diplomacy') || !document.getElementById('diplomacy').contains(document.activeElement)]"
+      hx-target="#diplomacy"
+      hx-swap="innerHTML">
+      {{ template "diplomacy_inner" . }}
+    </div>
     <div id="players" class="card"
       hx-get="/frag/players"
       hx-trigger="every 5s"
