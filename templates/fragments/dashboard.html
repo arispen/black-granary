@@ -90,6 +90,9 @@
           <span>Taken by: {{ .OwnerName }}</span>
           {{ if ne .OwnerName "-" }}<span>Stance: {{ .Stance }}</span>{{ end }}
         </div>
+        {{ if .ShowOutcome }}
+          <div class="contract-outcome">Outcome: {{ .OutcomeLabel }}{{ if .OutcomeNote }} · {{ .OutcomeNote }}{{ end }}</div>
+        {{ end }}
         <div class="actions">
           {{ if .CanAccept }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button,select">
@@ -121,7 +124,7 @@
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="deliver">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="warn" type="submit">{{ .DeliverLabel }}</button>
+              <button class="warn" type="submit" {{ if .DeliverDisabled }}disabled{{ end }}>{{ .DeliverLabel }}</button>
             </form>
           {{ end }}
         </div>

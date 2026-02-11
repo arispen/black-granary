@@ -32,6 +32,7 @@
     .header { margin-bottom: 14px; }
     h1 { margin: 0; font-size: 1.45rem; }
     .muted { color: var(--muted); }
+    .tick-status { font-size: 0.82rem; margin-top: 4px; }
     .layout {
       display: grid;
       grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
@@ -56,6 +57,7 @@
     .contract.warning { border-color: #7a5d19; }
     .contract.urgent { border-color: #7d2a2a; box-shadow: 0 0 0 1px #602121 inset; }
     .contract .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+    .contract-outcome { margin-top: 6px; color: var(--muted); font-size: 0.84rem; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     button {
       border: 1px solid #3b4f69;
@@ -66,6 +68,7 @@
       cursor: pointer;
       font-size: 0.86rem;
     }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
     button:hover { background: #29466a; }
     button.secondary { background: #212f42; }
     button.secondary:hover { background: #2a3b52; }

@@ -170,7 +170,7 @@ func TestWhisperSuccessIncrementsRumors(t *testing.T) {
 	}
 }
 
-func TestDeliverCostNeverNegative(t *testing.T) {
+func TestDeliverRequiresGold(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
 	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 1, Rep: 0, LastSeen: now}
@@ -178,8 +178,11 @@ func TestDeliverCostNeverNegative(t *testing.T) {
 	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Accepted", OwnerPlayerID: p.ID, OwnerName: p.Name}
 
 	handleActionLocked(s, p, now, "deliver", "c1")
-	if p.Gold != 0 {
-		t.Fatalf("deliver should clamp gold to 0, got %d", p.Gold)
+	if p.Gold != 1 {
+		t.Fatalf("deliver should require gold before attempting, got %d", p.Gold)
+	}
+	if s.Contracts["c1"].Status != "Accepted" {
+		t.Fatalf("deliver should not complete without gold, status=%s", s.Contracts["c1"].Status)
 	}
 }
 
