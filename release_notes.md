@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.7.0
+- Added public works projects with time-bound effects on grain, unrest, reputation, and heat.
+- Institutions panel now lists active projects and funding options.
+- Intel actions now respect investigate cooldowns and high-impact caps in the UI.
+
 ## 0.6.0
 - Added obligation costs with settle and forgive actions in the ledger.
 - Overdue obligations now apply heat/rep penalties and raise unrest.

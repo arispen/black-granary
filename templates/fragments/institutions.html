@@ -40,6 +40,41 @@
     </div>
   {{ end }}
 </div>
+<div class="muted" style="margin-top:10px;">Public Works</div>
+<div class="contracts" style="margin-top:8px;">
+  {{ range .Projects }}
+    <div class="contract">
+      <div><strong>{{ .Name }}</strong> <span class="pill">{{ .OwnerName }}</span></div>
+      <div class="meta">
+        <span>Ticks left: {{ .TicksLeft }}</span>
+        <span>{{ .EffectNote }}</span>
+      </div>
+    </div>
+  {{ else }}
+    <div class="muted">No public works underway.</div>
+  {{ end }}
+</div>
+<div class="contracts" style="margin-top:8px;">
+  {{ range .ProjectOptions }}
+    <div class="contract">
+      <div><strong>{{ .Name }}</strong></div>
+      <div class="meta">
+        <span>{{ .Description }}</span>
+        <span>Cost: {{ .CostGold }}g{{ if gt .CostGrain 0 }} · {{ .CostGrain }} sacks{{ end }} · {{ .DurationTicks }} ticks</span>
+      </div>
+      {{ if .DisabledReason }}
+        <div class="muted" style="margin-top:6px;">{{ .DisabledReason }}</div>
+      {{ end }}
+      <div class="actions">
+        <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+          <input type="hidden" name="action" value="launch_project">
+          <input type="hidden" name="project_type" value="{{ .Type }}">
+          <button class="secondary" type="submit" {{ if .Disabled }}disabled{{ end }}>Fund Project</button>
+        </form>
+      </div>
+    </div>
+  {{ end }}
+</div>
 {{ end }}
 
 {{ define "institutions_oob" }}

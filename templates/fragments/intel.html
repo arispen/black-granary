@@ -15,14 +15,14 @@
     <select name="target_id" aria-label="Investigate target">
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit">Investigate</button>
+    <button class="secondary" type="submit" {{ if .InvestigateDisabled }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="publish_evidence">
     <select name="target_id" aria-label="Publish target">
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit">Publish Evidence</button>
+    <button class="secondary" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Publish Evidence</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="counter_narrative">

@@ -314,6 +314,74 @@ func TestSupplyContractFlow(t *testing.T) {
 	}
 }
 
+func TestLaunchProjectCreatesAndCostsResources(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, Grain: 6, LastSeen: now}
+	s.Players[p.ID] = p
+
+	def, ok := projectDefinitionByType("granary_reinforcement")
+	if !ok {
+		t.Fatalf("expected granary project definition")
+	}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "launch_project", ProjectType: def.Type})
+
+	if len(s.Projects) != 1 {
+		t.Fatalf("expected one project, got %d", len(s.Projects))
+	}
+	if p.Gold != 20-def.CostGold {
+		t.Fatalf("project should spend gold, got %d want %d", p.Gold, 20-def.CostGold)
+	}
+	if p.Grain != 6-def.CostGrain {
+		t.Fatalf("project should spend grain, got %d want %d", p.Grain, 6-def.CostGrain)
+	}
+	if s.DailyHighImpactN[p.ID] != 1 {
+		t.Fatalf("project should consume high impact, got %d", s.DailyHighImpactN[p.ID])
+	}
+}
+
+func TestProjectCompletionAppliesEffects(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 0, Rep: 0, Heat: 5, Grain: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	def, ok := projectDefinitionByType("civic_patrols")
+	if !ok {
+		t.Fatalf("expected civic patrols definition")
+	}
+
+	startGrain := s.World.GrainSupply
+	s.World.UnrestValue = 20
+	s.Projects["p-1"] = &Project{
+		ID:            "p-1",
+		Type:          def.Type,
+		Name:          def.Name,
+		OwnerPlayerID: p.ID,
+		OwnerName:     p.Name,
+		TicksLeft:     1,
+		TotalTicks:    def.DurationTicks,
+	}
+
+	processProjectTickLocked(s, now)
+
+	if len(s.Projects) != 0 {
+		t.Fatalf("project should complete and be removed")
+	}
+	expectedUnrest := clampInt(20+def.UnrestDelta, 0, 100)
+	if s.World.UnrestValue != expectedUnrest {
+		t.Fatalf("unexpected unrest value, got %d want %d", s.World.UnrestValue, expectedUnrest)
+	}
+	expectedHeat := clampInt(5+def.HeatDelta, 0, 20)
+	if p.Heat != expectedHeat {
+		t.Fatalf("unexpected heat value, got %d want %d", p.Heat, expectedHeat)
+	}
+	if s.World.GrainSupply != startGrain {
+		t.Fatalf("grain supply should remain unchanged, got %d want %d", s.World.GrainSupply, startGrain)
+	}
+}
+
 func TestBountyDeliveryRequiresEvidence(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

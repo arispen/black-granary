@@ -52,6 +52,7 @@ const (
 	supplyContractMaxReward     = 60
 	supplyContractDeadlineTicks = 3
 	obligationDueTicks          = 3
+	projectMaxActive            = 4
 )
 
 type WorldState struct {
@@ -191,6 +192,31 @@ type Obligation struct {
 	Status           string
 }
 
+type Project struct {
+	ID            string
+	Type          string
+	Name          string
+	OwnerPlayerID string
+	OwnerName     string
+	CostGold      int
+	CostGrain     int
+	TicksLeft     int
+	TotalTicks    int
+}
+
+type ProjectDefinition struct {
+	Type          string
+	Name          string
+	Description   string
+	CostGold      int
+	CostGrain     int
+	DurationTicks int
+	GrainDelta    int
+	UnrestDelta   int
+	RepDelta      int
+	HeatDelta     int
+}
+
 type Store struct {
 	mu sync.Mutex
 
@@ -204,6 +230,7 @@ type Store struct {
 	Evidence     map[int64]*Evidence
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
+	Projects     map[string]*Project
 
 	Events []Event
 	Chat   []ChatMessage
@@ -215,6 +242,7 @@ type Store struct {
 	NextEvidenceID   int64
 	NextLoanID       int64
 	NextObligationID int64
+	NextProjectID    int64
 
 	LastDailyTickDate string
 	LastTickAt        time.Time
@@ -358,6 +386,25 @@ type ObligationView struct {
 	CanForgive     bool
 }
 
+type ProjectView struct {
+	ID         string
+	Name       string
+	OwnerName  string
+	TicksLeft  int
+	EffectNote string
+}
+
+type ProjectOption struct {
+	Type           string
+	Name           string
+	Description    string
+	CostGold       int
+	CostGrain      int
+	DurationTicks  int
+	Disabled       bool
+	DisabledReason string
+}
+
 type PlayerOption struct {
 	ID   string
 	Name string
@@ -404,6 +451,8 @@ type PageData struct {
 	Evidence             []EvidenceView
 	Loans                []LoanView
 	Obligations          []ObligationView
+	Projects             []ProjectView
+	ProjectOptions       []ProjectOption
 	PlayerOptions        []PlayerOption
 	TickStatus           string
 }
@@ -592,6 +641,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			Topic:        strings.TrimSpace(r.FormValue("topic")),
 			LoanID:       strings.TrimSpace(r.FormValue("loan_id")),
 			ObligationID: strings.TrimSpace(r.FormValue("obligation_id")),
+			ProjectType:  strings.TrimSpace(r.FormValue("project_type")),
 		}
 		if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("amount"))); err == nil {
 			input.Amount = n
@@ -745,6 +795,7 @@ func newStore() *Store {
 		Evidence:          map[int64]*Evidence{},
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
+		Projects:          map[string]*Project{},
 		Events:            []Event{},
 		Chat:              []ChatMessage{},
 		LastDailyTickDate: "",
@@ -787,11 +838,13 @@ func resetStoreLocked(s *Store) {
 	s.Evidence = map[int64]*Evidence{}
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
+	s.Projects = map[string]*Project{}
 	s.Events = []Event{}
 	s.Chat = []ChatMessage{}
 	s.NextEventID = 0
 	s.NextContractID = 0
 	s.NextChatID = 0
+	s.NextProjectID = 0
 	s.LastDailyTickDate = ""
 	s.LastTickAt = now
 	s.TickCount = 0
@@ -831,6 +884,7 @@ func runWorldTickLocked(store *Store, now time.Time) {
 	processInstitutionTickLocked(store, now)
 	processIntelTickLocked(store, now)
 	processFinanceTickLocked(store, now)
+	processProjectTickLocked(store, now)
 	processPlayerTickLocked(store)
 	w := &store.World
 	prevGrainTier := w.GrainTier
@@ -1195,6 +1249,50 @@ func processFinanceTickLocked(store *Store, now time.Time) {
 	}
 }
 
+func processProjectTickLocked(store *Store, now time.Time) {
+	if len(store.Projects) == 0 {
+		return
+	}
+	for id, proj := range store.Projects {
+		proj.TicksLeft--
+		if proj.TicksLeft > 0 {
+			continue
+		}
+		def, ok := projectDefinitionByType(proj.Type)
+		if ok {
+			if def.GrainDelta != 0 {
+				applyGrainSupplyDeltaLocked(store, now, def.GrainDelta)
+			}
+			if def.UnrestDelta != 0 {
+				store.World.UnrestValue = clampInt(store.World.UnrestValue+def.UnrestDelta, 0, 100)
+				store.World.UnrestTier = unrestTierFromValue(store.World.UnrestValue)
+			}
+			if owner := store.Players[proj.OwnerPlayerID]; owner != nil {
+				if def.RepDelta != 0 {
+					owner.Rep = clampInt(owner.Rep+def.RepDelta, -100, 100)
+				}
+				if def.HeatDelta != 0 {
+					owner.Heat = clampInt(owner.Heat+def.HeatDelta, 0, 20)
+				}
+			}
+			addEventLocked(store, Event{
+				Type:     "Civic",
+				Severity: 2,
+				Text:     fmt.Sprintf("%s completes; %s", proj.Name, projectEffectNote(def)),
+				At:       now,
+			})
+		} else {
+			addEventLocked(store, Event{
+				Type:     "Civic",
+				Severity: 1,
+				Text:     fmt.Sprintf("%s completes and ripples through the city.", proj.Name),
+				At:       now,
+			})
+		}
+		delete(store.Projects, id)
+	}
+}
+
 func processPlayerTickLocked(store *Store) {
 	for _, p := range store.Players {
 		if p.RiteImmunityTicks > 0 {
@@ -1367,6 +1465,7 @@ type ActionInput struct {
 	Topic        string
 	LoanID       string
 	ObligationID string
+	ProjectType  string
 	Amount       int
 	Sacks        int
 	Reward       int
@@ -1935,6 +2034,56 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		} else {
 			setToastLocked(store, p.ID, "No contract available to broker.")
 		}
+	case "launch_project":
+		def, ok := projectDefinitionByType(in.ProjectType)
+		if !ok {
+			setToastLocked(store, p.ID, "Project type not found.")
+			return
+		}
+		if len(store.Projects) >= projectMaxActive {
+			setToastLocked(store, p.ID, "City project capacity reached.")
+			return
+		}
+		if playerHasActiveProjectLocked(store, p.ID) {
+			setToastLocked(store, p.ID, "You already have a project underway.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		if p.Gold < def.CostGold {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to fund this project.", def.CostGold))
+			return
+		}
+		if p.Grain < def.CostGrain {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %d sacks to fund this project.", def.CostGrain))
+			return
+		}
+		p.Gold -= def.CostGold
+		if def.CostGrain > 0 {
+			p.Grain -= def.CostGrain
+		}
+		store.NextProjectID++
+		id := fmt.Sprintf("p-%d", store.NextProjectID)
+		store.Projects[id] = &Project{
+			ID:            id,
+			Type:          def.Type,
+			Name:          def.Name,
+			OwnerPlayerID: p.ID,
+			OwnerName:     p.Name,
+			CostGold:      def.CostGold,
+			CostGrain:     def.CostGrain,
+			TicksLeft:     def.DurationTicks,
+			TotalTicks:    def.DurationTicks,
+		}
+		addEventLocked(store, Event{
+			Type:     "Civic",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] funds %s (%d ticks).", p.Name, def.Name, def.DurationTicks),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("%s funded.", def.Name))
 	case "invoke_rite":
 		p.RiteImmunityTicks = 3
 		p.Rep = clampInt(p.Rep+2, -100, 100)
@@ -2356,6 +2505,15 @@ func playerAcceptedCountLocked(store *Store, playerID string) int {
 		}
 	}
 	return n
+}
+
+func playerHasActiveProjectLocked(store *Store, playerID string) bool {
+	for _, proj := range store.Projects {
+		if proj.OwnerPlayerID == playerID {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedContractsLocked(store *Store) []*Contract {
@@ -2831,6 +2989,61 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		investigateLabel = fmt.Sprintf("Investigate (%dt)", investigateCooldown)
 	}
 
+	projects := make([]ProjectView, 0, len(store.Projects))
+	for _, proj := range store.Projects {
+		owner := proj.OwnerName
+		if owner == "" {
+			owner = "-"
+		} else if ownerP := store.Players[proj.OwnerPlayerID]; ownerP != nil {
+			owner = fmt.Sprintf("%s (%s)", ownerP.Name, reputationTitle(ownerP.Rep))
+		}
+		effectNote := "effects pending"
+		if def, ok := projectDefinitionByType(proj.Type); ok {
+			effectNote = projectEffectNote(def)
+		}
+		projects = append(projects, ProjectView{
+			ID:         proj.ID,
+			Name:       proj.Name,
+			OwnerName:  owner,
+			TicksLeft:  proj.TicksLeft,
+			EffectNote: effectNote,
+		})
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		if projects[i].TicksLeft != projects[j].TicksLeft {
+			return projects[i].TicksLeft < projects[j].TicksLeft
+		}
+		return projects[i].Name < projects[j].Name
+	})
+
+	projectOptions := make([]ProjectOption, 0, len(projectDefinitions()))
+	playerHasProject := playerHasActiveProjectLocked(store, p.ID)
+	activeProjectCount := len(store.Projects)
+	for _, def := range projectDefinitions() {
+		disabledReason := ""
+		if activeProjectCount >= projectMaxActive {
+			disabledReason = "City project capacity reached."
+		} else if playerHasProject {
+			disabledReason = "You already have a project underway."
+		} else if highImpactRemaining == 0 {
+			disabledReason = "Daily high-impact cap reached."
+		} else if p.Gold < def.CostGold {
+			disabledReason = fmt.Sprintf("Need %dg.", def.CostGold)
+		} else if def.CostGrain > 0 && p.Grain < def.CostGrain {
+			disabledReason = fmt.Sprintf("Need %d sacks.", def.CostGrain)
+		}
+		projectOptions = append(projectOptions, ProjectOption{
+			Type:           def.Type,
+			Name:           def.Name,
+			Description:    def.Description,
+			CostGold:       def.CostGold,
+			CostGrain:      def.CostGrain,
+			DurationTicks:  def.DurationTicks,
+			Disabled:       disabledReason != "",
+			DisabledReason: disabledReason,
+		})
+	}
+
 	marketBase := marketBasePrice(store.World.GrainTier)
 	marketBuy := marketBuyPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
 	marketSell := marketSellPrice(marketBase, store.Policies.TaxRatePct, store.World.RestrictedMarketsTicks)
@@ -2895,6 +3108,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Evidence:             evidence,
 		Loans:                loans,
 		Obligations:          obligations,
+		Projects:             projects,
+		ProjectOptions:       projectOptions,
 		PlayerOptions:        playerOptions,
 		TickStatus:           tickStatus,
 	}
@@ -3166,6 +3381,70 @@ func applyGrainSupplyDeltaLocked(store *Store, now time.Time, delta int) {
 	if store.World.GrainTier != prevTier {
 		addEventLocked(store, Event{Type: "Grain", Severity: 2, Text: grainTierNarrative(prevTier, store.World.GrainTier), At: now})
 	}
+}
+
+func projectDefinitions() []ProjectDefinition {
+	return []ProjectDefinition{
+		{
+			Type:          "granary_reinforcement",
+			Name:          "Granary Reinforcement",
+			Description:   "Expand storage and repair leakage.",
+			CostGold:      10,
+			CostGrain:     4,
+			DurationTicks: 3,
+			GrainDelta:    60,
+			UnrestDelta:   -4,
+		},
+		{
+			Type:          "civic_patrols",
+			Name:          "Civic Patrols",
+			Description:   "Fund watch patrols to cool hot streets.",
+			CostGold:      8,
+			CostGrain:     0,
+			DurationTicks: 2,
+			UnrestDelta:   -6,
+			HeatDelta:     -2,
+		},
+		{
+			Type:          "public_festival",
+			Name:          "Public Festival",
+			Description:   "Sponsor a sanctioned feast to lift morale.",
+			CostGold:      6,
+			CostGrain:     2,
+			DurationTicks: 2,
+			UnrestDelta:   -5,
+			RepDelta:      2,
+		},
+	}
+}
+
+func projectDefinitionByType(projectType string) (ProjectDefinition, bool) {
+	for _, def := range projectDefinitions() {
+		if def.Type == projectType {
+			return def, true
+		}
+	}
+	return ProjectDefinition{}, false
+}
+
+func projectEffectNote(def ProjectDefinition) string {
+	parts := make([]string, 0, 4)
+	if def.GrainDelta != 0 {
+		parts = append(parts, fmt.Sprintf("%+d grain", def.GrainDelta))
+	}
+	if def.UnrestDelta != 0 {
+		parts = append(parts, fmt.Sprintf("%+d unrest", def.UnrestDelta))
+	}
+	if def.RepDelta != 0 {
+		parts = append(parts, fmt.Sprintf("%+d rep", def.RepDelta))
+	}
+	if def.HeatDelta != 0 {
+		parts = append(parts, fmt.Sprintf("%+d heat", def.HeatDelta))
+	}
+	if len(parts) == 0 {
+		return "no clear effect"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func normalizeContractStance(raw string) string {
