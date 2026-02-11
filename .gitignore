@@ -1,0 +1,27 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env / local overrides
+.env
+.env.*
+!.env.example
+
+# Go build and test artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+cover.out
+*.coverprofile
+
+# Local binaries and temporary runs
+tmp/
+
