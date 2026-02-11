@@ -1,5 +1,6 @@
 {{ define "intel_inner" }}
 <h3>Intel</h3>
+<div class="muted" style="margin-bottom:6px;">High impact actions remaining: {{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:0;">
   <input type="hidden" name="action" value="seed_rumor">
   <select name="target_id" aria-label="Rumor target">
@@ -34,14 +35,14 @@
   <select name="target_id" aria-label="Threaten target">
     {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
   </select>
-  <button class="warn" type="submit">Threaten Exposure</button>
+  <button class="warn" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Threaten Exposure</button>
 </form>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
   <input type="hidden" name="action" value="accuse_heresy">
   <select name="target_id" aria-label="Accuse target">
     {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
   </select>
-  <button class="warn" type="submit">Accuse Heresy</button>
+  <button class="warn" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Accuse Heresy</button>
 </form>
 <div class="muted" style="margin-top:8px;">Rumors</div>
 <div class="events" style="max-height:160px;">

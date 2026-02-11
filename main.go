@@ -333,6 +333,10 @@ type PageData struct {
 	Standing         StandingView
 	World            WorldState
 	Situation        string
+	HighImpactRemaining int
+	HighImpactCap       int
+	InvestigateDisabled bool
+	InvestigateLabel    string
 	Contracts        []ContractView
 	Events           []EventView
 	Players          []PlayerSummary
@@ -1957,6 +1961,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		return PageData{}
 	}
 	ensureTodayCounterLocked(p, now)
+	today := now.UTC().Format("2006-01-02")
 
 	contractView := func(c *Contract) ContractView {
 		urgency := ""
@@ -1991,6 +1996,20 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 				if p.Gold < 2 {
 					deliverDisabled = true
 					outcomeNote = "Need 2g to attempt."
+				}
+				if lastDeliverAt, ok := store.LastDeliverAt[p.ID]; ok {
+					cooldownRemaining := deliverCooldown - now.Sub(lastDeliverAt)
+					if cooldownRemaining > 0 {
+						remainingSeconds := int(cooldownRemaining.Seconds())
+						if remainingSeconds == 0 {
+							remainingSeconds = 1
+						}
+						deliverDisabled = true
+						if outcomeNote != "" {
+							outcomeNote += " "
+						}
+						outcomeNote += fmt.Sprintf("Delivery cooldown: %ds.", remainingSeconds)
+					}
 				}
 			}
 			if p.Rumors > 0 {
@@ -2261,6 +2280,27 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	tickStatus := fmt.Sprintf("Next tick in %ds · cadence %ds", int(remaining.Seconds()), int(store.TickEvery.Seconds()))
 
+	highImpactRemaining := highImpactDailyCap
+	if store.DailyActionDate[playerID] == today {
+		highImpactRemaining = highImpactDailyCap - store.DailyHighImpactN[playerID]
+	}
+	if highImpactRemaining < 0 {
+		highImpactRemaining = 0
+	}
+
+	investigateCooldown := 0
+	if lastTick, ok := store.LastInvestigateAt[p.ID]; ok {
+		diff := int(store.TickCount - lastTick)
+		if diff < 3 {
+			investigateCooldown = 3 - diff
+		}
+	}
+	investigateDisabled := investigateCooldown > 0
+	investigateLabel := "Investigate"
+	if investigateDisabled {
+		investigateLabel = fmt.Sprintf("Investigate (%dt)", investigateCooldown)
+	}
+
 	return PageData{
 		NowUTC:      now.Format(time.RFC3339),
 		Player:      p,
@@ -2277,6 +2317,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		},
 		World:            store.World,
 		Situation:        store.World.Situation,
+		HighImpactRemaining: highImpactRemaining,
+		HighImpactCap:       highImpactDailyCap,
+		InvestigateDisabled: investigateDisabled,
+		InvestigateLabel:    investigateLabel,
 		Contracts:        contracts,
 		Events:           events,
 		Players:          players,

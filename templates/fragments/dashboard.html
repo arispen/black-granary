@@ -17,6 +17,7 @@
     <div class="card"><strong>Impact</strong><br>Today {{ .Standing.CompletedToday }}</div>
     <div class="card"><strong>Impact</strong><br>Lifetime {{ .Standing.CompletedTotal }}</div>
     <div class="card"><strong>Rumors</strong><br>{{ .Standing.Rumors }}</div>
+    <div class="card"><strong>High Impact</strong><br>{{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
@@ -136,7 +137,7 @@
   <div class="actions" style="margin-top:10px;">
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="investigate">
-      <button type="submit">Investigate</button>
+      <button type="submit" {{ if .InvestigateDisabled }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="petition_institution">
