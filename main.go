@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1042,10 +1043,12 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 
 	contractView := func(c *Contract) ContractView {
 		urgency := ""
-		if c.DeadlineTicks <= 1 {
-			urgency = "urgent"
-		} else if c.DeadlineTicks <= 2 {
-			urgency = "warning"
+		if c.Status == "Issued" || c.Status == "Accepted" {
+			if c.DeadlineTicks <= 1 {
+				urgency = "urgent"
+			} else if c.DeadlineTicks <= 2 {
+				urgency = "warning"
+			}
 		}
 		owner := c.OwnerName
 		if owner == "" {
@@ -1082,8 +1085,16 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		}
 	}
 
-	activeContracts := []ContractView{}
-	terminalContracts := []ContractView{}
+	type scoredContractView struct {
+		View       ContractView
+		Group      int
+		Deadline   int
+		IssuedAt   int64
+		SequenceID int
+		ID         string
+	}
+
+	scored := []scoredContractView{}
 	totalContractN := 0
 	for _, c := range sortedContractsLocked(store) {
 		if p.Rep < -50 && c.Type == "Smuggling" && c.Status == "Issued" {
@@ -1091,23 +1102,70 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		}
 		totalContractN++
 		cv := contractView(c)
+		group := 6
 		switch c.Status {
-		case "Issued", "Accepted", "Fulfilled", "Ignored":
-			if len(activeContracts) < maxVisibleContracts {
-				activeContracts = append(activeContracts, cv)
+		case "Accepted":
+			if c.OwnerPlayerID == p.ID {
+				group = 0
+			} else {
+				group = 3
 			}
-		default:
-			terminalContracts = append(terminalContracts, cv)
+		case "Fulfilled":
+			if c.OwnerPlayerID == p.ID {
+				group = 1
+			} else {
+				group = 5
+			}
+		case "Issued":
+			group = 2
+		case "Ignored":
+			group = 4
 		}
+		scored = append(scored, scoredContractView{
+			View:       cv,
+			Group:      group,
+			Deadline:   c.DeadlineTicks,
+			IssuedAt:   c.IssuedAtTick,
+			SequenceID: parseContractSequence(c.ID),
+			ID:         c.ID,
+		})
 	}
 
-	contracts := activeContracts
-	if len(contracts) < maxVisibleContracts {
-		remain := maxVisibleContracts - len(contracts)
-		if remain > len(terminalContracts) {
-			remain = len(terminalContracts)
+	sort.Slice(scored, func(i, j int) bool {
+		a := scored[i]
+		b := scored[j]
+		if a.Group != b.Group {
+			return a.Group < b.Group
 		}
-		contracts = append(contracts, terminalContracts[:remain]...)
+		// Keep urgent/actionable contracts first for active groups.
+		if a.Group <= 5 {
+			if a.Deadline != b.Deadline {
+				return a.Deadline < b.Deadline
+			}
+			if a.IssuedAt != b.IssuedAt {
+				return a.IssuedAt > b.IssuedAt
+			}
+			if a.SequenceID != b.SequenceID {
+				return a.SequenceID > b.SequenceID
+			}
+			return a.ID < b.ID
+		}
+		// For terminal contracts, show most recent first.
+		if a.IssuedAt != b.IssuedAt {
+			return a.IssuedAt > b.IssuedAt
+		}
+		if a.SequenceID != b.SequenceID {
+			return a.SequenceID > b.SequenceID
+		}
+		return a.ID > b.ID
+	})
+
+	if len(scored) > maxVisibleContracts {
+		scored = scored[:maxVisibleContracts]
+	}
+	contracts := make([]ContractView, 0, len(scored))
+	for _, s := range scored {
+		contracts = append(contracts, s.View)
 	}
 
 	events := make([]EventView, 0, len(store.Events))
@@ -1171,6 +1229,16 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		VisibleContractN: len(contracts),
 		TotalContractN:   totalContractN,
 	}
+}
+
+func parseContractSequence(id string) int {
+	if strings.HasPrefix(id, "c-") {
+		n, err := strconv.Atoi(strings.TrimPrefix(id, "c-"))
+		if err == nil {
+			return n
+		}
+	}
+	return -1
 }
 
 func messageVisibleToPlayer(m ChatMessage, playerID string) bool {

@@ -197,8 +197,8 @@ func TestContractActionVisibilityByState(t *testing.T) {
 	s.Players[other.ID] = other
 
 	s.Contracts["issued"] = &Contract{ID: "issued", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
-	s.Contracts["accepted"] = &Contract{ID: "accepted", Type: "Emergency", DeadlineTicks: 3, Status: "Accepted", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
-	s.Contracts["fulfilled"] = &Contract{ID: "fulfilled", Type: "Emergency", DeadlineTicks: 3, Status: "Fulfilled", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
+	s.Contracts["accepted"] = &Contract{ID: "accepted", Type: "Emergency", DeadlineTicks: 2, Status: "Accepted", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
+	s.Contracts["fulfilled"] = &Contract{ID: "fulfilled", Type: "Emergency", DeadlineTicks: 1, Status: "Fulfilled", OwnerPlayerID: p.ID, OwnerName: p.Name, Stance: contractStanceCareful}
 	s.Contracts["completed"] = &Contract{ID: "completed", Type: "Emergency", DeadlineTicks: 3, Status: "Completed", OwnerPlayerID: p.ID, OwnerName: p.Name}
 
 	data := buildPageDataLocked(s, p.ID, false)
@@ -210,14 +210,23 @@ func TestContractActionVisibilityByState(t *testing.T) {
 	if !views["issued"].CanAccept || !views["issued"].CanIgnore || views["issued"].CanDeliver || views["issued"].CanAbandon {
 		t.Fatalf("issued contract should show only accept/ignore: %#v", views["issued"])
 	}
+	if views["issued"].UrgencyClass != "" {
+		t.Fatalf("issued contract with deadline=3 should be neutral, got %q", views["issued"].UrgencyClass)
+	}
 	if !views["accepted"].CanDeliver || !views["accepted"].CanAbandon || views["accepted"].CanAccept || views["accepted"].CanIgnore {
 		t.Fatalf("accepted contract should show deliver/abandon: %#v", views["accepted"])
+	}
+	if views["accepted"].UrgencyClass != "warning" {
+		t.Fatalf("accepted contract with deadline=2 should be warning, got %q", views["accepted"].UrgencyClass)
 	}
 	if views["accepted"].DeliverLabel != "Deliver (+20g)" {
 		t.Fatalf("accepted contract deliver label mismatch: %q", views["accepted"].DeliverLabel)
 	}
 	if !views["fulfilled"].CanDeliver || views["fulfilled"].CanAbandon || views["fulfilled"].CanAccept || views["fulfilled"].CanIgnore {
 		t.Fatalf("fulfilled contract should show deliver only: %#v", views["fulfilled"])
+	}
+	if views["fulfilled"].UrgencyClass != "" {
+		t.Fatalf("fulfilled contract should be neutral urgency, got %q", views["fulfilled"].UrgencyClass)
 	}
 	if views["fulfilled"].DeliverLabel != "Deliver (+22g)" {
 		t.Fatalf("fulfilled contract deliver label mismatch: %q", views["fulfilled"].DeliverLabel)
@@ -251,6 +260,47 @@ func TestContractsAreCappedInDashboardData(t *testing.T) {
 	}
 	if len(data.Contracts) != maxVisibleContracts {
 		t.Fatalf("contract views should be capped at %d, got %d", maxVisibleContracts, len(data.Contracts))
+	}
+}
+
+func TestContractCapPrioritizesIssuedOverNonActionableFulfilled(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	// Fill with non-actionable fulfilled contracts first.
+	for i := 1; i <= maxVisibleContracts+3; i++ {
+		id := fmt.Sprintf("c-%d", i)
+		s.Contracts[id] = &Contract{
+			ID:            id,
+			Type:          "Emergency",
+			DeadlineTicks: 3,
+			Status:        "Fulfilled",
+			OwnerPlayerID: "other",
+			OwnerName:     "Bran Vale (Guest)",
+			IssuedAtTick:  int64(i),
+		}
+	}
+	// Add one issued contract that should still be visible.
+	s.Contracts["c-999"] = &Contract{
+		ID:            "c-999",
+		Type:          "Smuggling",
+		DeadlineTicks: 2,
+		Status:        "Issued",
+		IssuedAtTick:  999,
+	}
+
+	data := buildPageDataLocked(s, p.ID, false)
+	foundIssued := false
+	for _, cv := range data.Contracts {
+		if cv.ID == "c-999" && cv.Status == "Issued" && cv.CanAccept {
+			foundIssued = true
+			break
+		}
+	}
+	if !foundIssued {
+		t.Fatalf("issued contract should remain visible under cap when non-actionable fulfilled contracts exist")
 	}
 }
 
