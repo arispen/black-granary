@@ -144,6 +144,9 @@ type ContractView struct {
 	CanAbandon    bool
 	CanDeliver    bool
 	DeliverLabel  string
+	ShowOutcome   bool
+	OutcomeLabel  string
+	OutcomeNote   string
 }
 
 type StandingView struct {
@@ -189,6 +192,7 @@ type PageData struct {
 	AcceptedCount    int
 	VisibleContractN int
 	TotalContractN   int
+	TickStatus       string
 }
 
 const (
@@ -1068,9 +1072,27 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		canIgnore := c.Status == "Issued"
 		canAbandon := c.Status == "Accepted" && c.OwnerPlayerID == p.ID
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
+
+		showOutcome := c.OwnerPlayerID == p.ID && (c.Status == "Accepted" || c.Status == "Fulfilled")
+		outcomeLabel := ""
+		outcomeNote := ""
+		var outcome DeliverOutcome
+		if showOutcome {
+			outcome = computeDeliverOutcomeLocked(p, c)
+			outcomeLabel = fmt.Sprintf("%+dg, %+d rep, %+d heat", outcome.RewardGold, outcome.RepDelta, outcome.HeatDelta)
+			if c.Status == "Accepted" {
+				outcomeNote = "Costs 2g to attempt."
+			}
+			if p.Rumors > 0 {
+				if outcomeNote != "" {
+					outcomeNote += " "
+				}
+				outcomeNote += "Rumor bonus ready."
+			}
+		}
+
 		deliverLabel := "Deliver"
-		if canDeliver {
-			outcome := computeDeliverOutcomeLocked(p, c)
+		if canDeliver && showOutcome {
 			netGold := outcome.RewardGold
 			if c.Status == "Accepted" && c.OwnerPlayerID == p.ID {
 				netGold -= 2
@@ -1090,6 +1112,9 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CanAbandon:    canAbandon,
 			CanDeliver:    canDeliver,
 			DeliverLabel:  deliverLabel,
+			ShowOutcome:   showOutcome,
+			OutcomeLabel:  outcomeLabel,
+			OutcomeNote:   outcomeNote,
 		}
 	}
 
@@ -1212,6 +1237,12 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		toast = peekToastLocked(store, playerID)
 	}
 
+	remaining := store.TickEvery - now.Sub(store.LastTickAt)
+	if remaining < 0 {
+		remaining = 0
+	}
+	tickStatus := fmt.Sprintf("Next tick in %ds · cadence %ds", int(remaining.Seconds()), int(store.TickEvery.Seconds()))
+
 	return PageData{
 		NowUTC:      now.Format(time.RFC3339),
 		Player:      p,
@@ -1236,6 +1267,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		AcceptedCount:    playerAcceptedCountLocked(store, playerID),
 		VisibleContractN: len(contracts),
 		TotalContractN:   totalContractN,
+		TickStatus:       tickStatus,
 	}
 }
 

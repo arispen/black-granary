@@ -1,6 +1,7 @@
 {{ define "header_inner" }}
 <h1>Black Granary</h1>
 <div class="muted">Shared test realm. Day {{ .World.DayNumber }} · {{ .World.Subphase }} · You are {{ .Player.Name }}</div>
+<div class="muted tick-status">{{ .TickStatus }}</div>
 {{ end }}
 
 {{ define "header" }}
