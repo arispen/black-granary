@@ -43,6 +43,9 @@ const (
 	grainUnitPerSack      = 6
 	marketMaxTrade        = 12
 	reliefSackCost        = 3
+	wantedHeatThreshold   = 10
+	bountyEvidenceMin     = 4
+	bountyDeadlineTicks   = 4
 )
 
 type WorldState struct {
@@ -74,14 +77,18 @@ type Player struct {
 }
 
 type Contract struct {
-	ID            string
-	Type          string
-	DeadlineTicks int
-	Status        string
-	OwnerPlayerID string
-	OwnerName     string
-	Stance        string
-	IssuedAtTick  int64
+	ID             string
+	Type           string
+	DeadlineTicks  int
+	Status         string
+	OwnerPlayerID  string
+	OwnerName      string
+	Stance         string
+	IssuedAtTick   int64
+	TargetPlayerID string
+	TargetName     string
+	BountyReward   int
+	BountyEvidence int
 }
 
 type Event struct {
@@ -218,11 +225,13 @@ type Store struct {
 }
 
 type PlayerSummary struct {
-	Name   string
-	Rep    int
-	Title  string
-	Gold   int
-	Online bool
+	Name      string
+	Rep       int
+	Title     string
+	Gold      int
+	Heat      int
+	HeatLabel string
+	Online    bool
 }
 
 type ContractView struct {
@@ -232,6 +241,7 @@ type ContractView struct {
 	DeadlineTicks   int
 	OwnerName       string
 	Stance          string
+	TargetName      string
 	UrgencyClass    string
 	CanAccept       bool
 	CanIgnore       bool
@@ -242,6 +252,8 @@ type ContractView struct {
 	ShowOutcome     bool
 	OutcomeLabel    string
 	OutcomeNote     string
+	RequirementNote string
+	IsBounty        bool
 }
 
 type StandingView struct {
@@ -852,6 +864,20 @@ func runWorldTickLocked(store *Store, now time.Time) {
 			}
 		}
 
+		if c.Type == "Bounty" {
+			c.DeadlineTicks--
+			if c.DeadlineTicks <= 0 {
+				c.Status = "Failed"
+				if c.OwnerPlayerID != "" {
+					if owner := store.Players[c.OwnerPlayerID]; owner != nil {
+						owner.Rep = clampInt(owner.Rep-3, -100, 100)
+					}
+				}
+				addEventLocked(store, Event{Type: "Law", Severity: 2, Text: fmt.Sprintf("A bounty on [%s] lapses without arrests.", c.TargetName), At: now})
+			}
+			continue
+		}
+
 		chance := fulfillChanceForTier(w.GrainTier)
 		if c.Status == "Accepted" {
 			chance = minInt(chance+15, 95)
@@ -919,6 +945,22 @@ func runWorldTickLocked(store *Store, now time.Time) {
 	if (w.GrainTier == "Scarce" || w.GrainTier == "Critical") && !hasActiveContractLocked(store, "Smuggling") {
 		issueContractLocked(store, "Smuggling", 3)
 		addEventLocked(store, Event{Type: "Faction", Severity: 3, Text: "[Merchant League] issues smuggling orders.", At: now})
+	}
+	for _, target := range store.Players {
+		if target == nil {
+			continue
+		}
+		if !isWantedHeat(target.Heat) {
+			continue
+		}
+		if now.Sub(target.LastSeen) > inactiveWindow {
+			continue
+		}
+		if hasActiveBountyForTargetLocked(store, target.ID) {
+			continue
+		}
+		issueBountyContractLocked(store, target, bountyDeadlineTicks)
+		addEventLocked(store, Event{Type: "Law", Severity: 3, Text: fmt.Sprintf("[City Watch] posts a bounty on [%s].", target.Name), At: now})
 	}
 
 	if w.GrainTier != prevGrainTier {
@@ -1155,6 +1197,26 @@ func addObligationLocked(store *Store, creditor, debtor *Player, reason string, 
 	}
 }
 
+func applyBountyResolutionLocked(store *Store, hunter, target *Player, ev *Evidence, now time.Time) {
+	if store == nil || hunter == nil || target == nil {
+		return
+	}
+	strength := 0
+	if ev != nil {
+		strength = ev.Strength
+	}
+	heatDrop := clampInt(2+strength/2, 2, 6)
+	repDrop := clampInt(2+strength/3, 2, 6)
+	target.Heat = maxInt(0, target.Heat-heatDrop)
+	target.Rep = clampInt(target.Rep-repDrop, -100, 100)
+	addEventLocked(store, Event{
+		Type:     "Law",
+		Severity: 3,
+		Text:     fmt.Sprintf("[%s] delivers evidence; the Watch moves on [%s].", hunter.Name, target.Name),
+		At:       now,
+	})
+}
+
 func triggerInstitutionSanctionLocked(store *Store, target *Player, now time.Time) {
 	if target == nil {
 		return
@@ -1284,6 +1346,10 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "Permit required for emergency contracts.")
 			return
 		}
+		if c.Type == "Bounty" && c.TargetPlayerID == p.ID {
+			setToastLocked(store, p.ID, "You are the target of that bounty.")
+			return
+		}
 		if playerAcceptedCountLocked(store, p.ID) >= 1 {
 			setToastLocked(store, p.ID, "You can hold only one active contract.")
 			return
@@ -1291,7 +1357,11 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		c.Status = "Accepted"
 		c.OwnerPlayerID = p.ID
 		c.OwnerName = p.Name
-		c.Stance = normalizeContractStance(stance)
+		if c.Type != "Bounty" {
+			c.Stance = normalizeContractStance(stance)
+		} else {
+			c.Stance = ""
+		}
 		addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] commits to a dangerous contract.", p.Name), At: now})
 		setToastLocked(store, p.ID, "Contract accepted.")
 	case "ignore":
@@ -1318,6 +1388,27 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 	case "deliver":
 		if c == nil || c.OwnerPlayerID != p.ID || (c.Status != "Accepted" && c.Status != "Fulfilled") {
 			setToastLocked(store, p.ID, "You can only deliver your accepted or fulfilled contract.")
+			return
+		}
+		if c.Type == "Bounty" {
+			target := store.Players[c.TargetPlayerID]
+			if target == nil {
+				setToastLocked(store, p.ID, "Target no longer available.")
+				return
+			}
+			ev := strongestEvidenceForLocked(store, p.ID, target.ID)
+			required := c.BountyEvidence
+			if required <= 0 {
+				required = bountyEvidenceMin
+			}
+			if ev == nil || ev.Strength < required {
+				setToastLocked(store, p.ID, fmt.Sprintf("Need evidence strength %d+ on target.", required))
+				return
+			}
+			delete(store.Evidence, ev.ID)
+			applyBountyResolutionLocked(store, p, target, ev, now)
+			finalizeDeliveredContractLocked(store, p, c, now)
+			setToastLocked(store, p.ID, "Bounty delivered.")
 			return
 		}
 		if c.Status == "Fulfilled" {
@@ -1851,7 +1942,11 @@ func finalizeDeliveredContractLocked(store *Store, p *Player, c *Contract, now t
 		p.Rumors--
 	}
 	incrementCompletedCountersLocked(p, now)
-	addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: stanceEventText(outcome.Stance), At: now})
+	note := stanceEventText(outcome.Stance)
+	if c.Type == "Bounty" {
+		note = "Your report tightens the city's grip on crime."
+	}
+	addEventLocked(store, Event{Type: "Consequence", Severity: 1, Text: note, At: now})
 }
 
 func incrementCompletedCountersLocked(p *Player, now time.Time) {
@@ -1990,9 +2085,42 @@ func issueContractLocked(store *Store, ctype string, deadline int) {
 	store.Contracts[id] = &Contract{ID: id, Type: ctype, DeadlineTicks: deadline, Status: "Issued", IssuedAtTick: store.TickCount}
 }
 
+func issueBountyContractLocked(store *Store, target *Player, deadline int) {
+	if store == nil || target == nil {
+		return
+	}
+	store.NextContractID++
+	id := fmt.Sprintf("c-%d", store.NextContractID)
+	reward := clampInt(18+target.Heat*2, 20, 70)
+	store.Contracts[id] = &Contract{
+		ID:             id,
+		Type:           "Bounty",
+		DeadlineTicks:  deadline,
+		Status:         "Issued",
+		IssuedAtTick:   store.TickCount,
+		TargetPlayerID: target.ID,
+		TargetName:     target.Name,
+		BountyReward:   reward,
+		BountyEvidence: bountyEvidenceMin,
+	}
+}
+
 func hasActiveContractLocked(store *Store, ctype string) bool {
 	for _, c := range store.Contracts {
 		if c.Type == ctype && (c.Status == "Issued" || c.Status == "Accepted") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasActiveBountyForTargetLocked(store *Store, targetID string) bool {
+	for _, c := range store.Contracts {
+		if c.Type != "Bounty" || c.TargetPlayerID != targetID {
+			continue
+		}
+		switch c.Status {
+		case "Issued", "Accepted", "Fulfilled":
 			return true
 		}
 	}
@@ -2058,6 +2186,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	today := now.UTC().Format("2006-01-02")
 
 	contractView := func(c *Contract) ContractView {
+		isBounty := c.Type == "Bounty"
 		urgency := ""
 		if c.Status == "Issued" || c.Status == "Accepted" {
 			if c.DeadlineTicks <= 1 {
@@ -2074,6 +2203,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		}
 		canAccept := c.Status == "Issued"
 		canIgnore := c.Status == "Issued"
+		if isBounty && c.TargetPlayerID == p.ID {
+			canAccept = false
+			canIgnore = false
+		}
 		canAbandon := c.Status == "Accepted" && c.OwnerPlayerID == p.ID
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
 
@@ -2081,11 +2214,12 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		deliverDisabled := false
 		outcomeLabel := ""
 		outcomeNote := ""
+		requirementNote := ""
 		var outcome DeliverOutcome
 		if showOutcome {
 			outcome = computeDeliverOutcomeLocked(store, p, c)
 			outcomeLabel = fmt.Sprintf("%+dg, %+d rep, %+d heat", outcome.RewardGold, outcome.RepDelta, outcome.HeatDelta)
-			if c.Status == "Accepted" {
+			if c.Status == "Accepted" && !isBounty {
 				outcomeNote = "Costs 2g to attempt."
 				if p.Gold < 2 {
 					deliverDisabled = true
@@ -2106,21 +2240,43 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 					}
 				}
 			}
-			if p.Rumors > 0 {
+			if !isBounty && p.Rumors > 0 {
 				if outcomeNote != "" {
 					outcomeNote += " "
 				}
 				outcomeNote += "Rumor bonus ready."
 			}
+			if isBounty {
+				required := c.BountyEvidence
+				if required <= 0 {
+					required = bountyEvidenceMin
+				}
+				ev := strongestEvidenceForLocked(store, p.ID, c.TargetPlayerID)
+				if ev == nil || ev.Strength < required {
+					deliverDisabled = true
+					outcomeNote = fmt.Sprintf("Need evidence strength %d+ on target.", required)
+				}
+			}
+		}
+		if isBounty {
+			required := c.BountyEvidence
+			if required <= 0 {
+				required = bountyEvidenceMin
+			}
+			requirementNote = fmt.Sprintf("Requirement: evidence strength %d+ on target.", required)
 		}
 
 		deliverLabel := "Deliver"
 		if canDeliver && showOutcome {
 			netGold := outcome.RewardGold
-			if c.Status == "Accepted" && c.OwnerPlayerID == p.ID {
+			if c.Status == "Accepted" && c.OwnerPlayerID == p.ID && !isBounty {
 				netGold -= 2
 			}
 			deliverLabel = fmt.Sprintf("Deliver (%+dg)", netGold)
+		}
+		stanceValue := normalizeContractStance(c.Stance)
+		if isBounty {
+			stanceValue = ""
 		}
 		return ContractView{
 			ID:              c.ID,
@@ -2128,7 +2284,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			Status:          c.Status,
 			DeadlineTicks:   c.DeadlineTicks,
 			OwnerName:       owner,
-			Stance:          normalizeContractStance(c.Stance),
+			Stance:          stanceValue,
+			TargetName:      c.TargetName,
 			UrgencyClass:    urgency,
 			CanAccept:       canAccept,
 			CanIgnore:       canIgnore,
@@ -2139,6 +2296,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			ShowOutcome:     showOutcome,
 			OutcomeLabel:    outcomeLabel,
 			OutcomeNote:     outcomeNote,
+			RequirementNote: requirementNote,
+			IsBounty:        isBounty,
 		}
 	}
 
@@ -2235,7 +2394,15 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 
 	players := make([]PlayerSummary, 0, len(store.Players))
 	for _, pl := range store.Players {
-		players = append(players, PlayerSummary{Name: pl.Name, Rep: pl.Rep, Title: reputationTitle(pl.Rep), Gold: pl.Gold, Online: now.Sub(pl.LastSeen) <= onlineWindow})
+		players = append(players, PlayerSummary{
+			Name:      pl.Name,
+			Rep:       pl.Rep,
+			Title:     reputationTitle(pl.Rep),
+			Gold:      pl.Gold,
+			Heat:      pl.Heat,
+			HeatLabel: standingHeatLabel(pl.Heat),
+			Online:    now.Sub(pl.LastSeen) <= onlineWindow,
+		})
 	}
 	sort.Slice(players, func(i, j int) bool { return players[i].Name < players[j].Name })
 
@@ -2665,11 +2832,19 @@ func standingHeatLabel(heat int) string {
 	switch {
 	case heat <= 0:
 		return "Clean"
-	case heat <= 4:
+	case heat <= 3:
+		return "Noticed"
+	case heat <= 7:
 		return "Watched"
-	default:
+	case heat <= 11:
 		return "Wanted"
+	default:
+		return "Hunted"
 	}
+}
+
+func isWantedHeat(heat int) bool {
+	return heat >= wantedHeatThreshold
 }
 
 func payoutMultiplier(rep int) float64 {
@@ -2738,8 +2913,17 @@ func normalizeContractStance(raw string) string {
 
 func baseContractRewardGold(p *Player, c *Contract) int {
 	baseGold := 25
-	if c != nil && c.Type == "Smuggling" {
-		baseGold = 35
+	if c != nil {
+		switch c.Type {
+		case "Smuggling":
+			baseGold = 35
+		case "Bounty":
+			if c.BountyReward > 0 {
+				baseGold = c.BountyReward
+			} else {
+				baseGold = 28
+			}
+		}
 	}
 	rep := 0
 	if p != nil {
@@ -2752,12 +2936,18 @@ func baseContractRepDelta(c *Contract) int {
 	if c != nil && c.Type == "Smuggling" {
 		return 3
 	}
+	if c != nil && c.Type == "Bounty" {
+		return 6
+	}
 	return 8
 }
 
 func baseContractHeatDelta(c *Contract) int {
 	if c != nil && c.Type == "Smuggling" {
 		return 1
+	}
+	if c != nil && c.Type == "Bounty" {
+		return -2
 	}
 	return 0
 }
@@ -2770,6 +2960,15 @@ func computeDeliverOutcomeLocked(store *Store, p *Player, c *Contract) DeliverOu
 	reward := baseContractRewardGold(p, c)
 	repDelta := baseContractRepDelta(c)
 	heatDelta := baseContractHeatDelta(c)
+
+	if c != nil && c.Type == "Bounty" {
+		return DeliverOutcome{
+			RewardGold: reward,
+			HeatDelta:  heatDelta,
+			RepDelta:   repDelta,
+			Stance:     contractStanceCareful,
+		}
+	}
 
 	switch stance {
 	case contractStanceCareful:

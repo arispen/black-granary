@@ -5,7 +5,7 @@
     <div class="player-line">
       <strong>{{ .Name }}</strong>
       <span class="pill title-badge">{{ .Title }}</span>
-      <div class="muted">{{ .Gold }}g · Rep {{ .Rep }} · {{ if .Online }}<span class="online">online</span>{{ else }}<span class="offline">away</span>{{ end }}</div>
+      <div class="muted">{{ .Gold }}g · Rep {{ .Rep }} · Heat {{ .Heat }} ({{ .HeatLabel }}) · {{ if .Online }}<span class="online">online</span>{{ else }}<span class="offline">away</span>{{ end }}</div>
     </div>
   {{ else }}
     <div class="muted">No players known.</div>

@@ -90,21 +90,27 @@
         <div class="meta">
           <span>Deadline: {{ .DeadlineTicks }} ticks</span>
           <span>Taken by: {{ .OwnerName }}</span>
-          {{ if ne .OwnerName "-" }}<span>Stance: {{ .Stance }}</span>{{ end }}
+          {{ if .TargetName }}<span>Target: {{ .TargetName }}</span>{{ end }}
+          {{ if and (ne .OwnerName "-") (ne .Stance "") }}<span>Stance: {{ .Stance }}</span>{{ end }}
         </div>
         {{ if .ShowOutcome }}
           <div class="contract-outcome">Outcome: {{ .OutcomeLabel }}{{ if .OutcomeNote }} · {{ .OutcomeNote }}{{ end }}</div>
+        {{ end }}
+        {{ if .RequirementNote }}
+          <div class="contract-outcome">{{ .RequirementNote }}</div>
         {{ end }}
         <div class="actions">
           {{ if .CanAccept }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button,select">
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <select name="stance" aria-label="Choose stance">
-                <option value="Careful" selected>Careful</option>
-                <option value="Fast">Fast</option>
-                <option value="Quiet">Quiet</option>
-              </select>
+              {{ if not .IsBounty }}
+                <select name="stance" aria-label="Choose stance">
+                  <option value="Careful" selected>Careful</option>
+                  <option value="Fast">Fast</option>
+                  <option value="Quiet">Quiet</option>
+                </select>
+              {{ end }}
               <button type="submit">Accept</button>
             </form>
           {{ end }}

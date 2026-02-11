@@ -79,9 +79,13 @@ func TestStandingLabelMappingsAtBoundaries(t *testing.T) {
 		want string
 	}{
 		{0, "Clean"},
-		{1, "Watched"},
+		{1, "Noticed"},
+		{3, "Noticed"},
 		{4, "Watched"},
-		{5, "Wanted"},
+		{7, "Watched"},
+		{8, "Wanted"},
+		{11, "Wanted"},
+		{12, "Hunted"},
 	}
 	for _, tc := range heatCases {
 		if got := standingHeatLabel(tc.heat); got != tc.want {
@@ -213,6 +217,45 @@ func TestDeliveryCompletionIncrementsImpactAndHeat(t *testing.T) {
 	}
 	if p.CompletedContractsToday != 0 {
 		t.Fatalf("today counter should reset on UTC date change, got %d", p.CompletedContractsToday)
+	}
+}
+
+func TestBountyDeliveryRequiresEvidence(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	hunter := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, Heat: 12, LastSeen: now}
+	s.Players[hunter.ID] = hunter
+	s.Players[target.ID] = target
+
+	issueBountyContractLocked(s, target, bountyDeadlineTicks)
+	var bountyID string
+	for id, c := range s.Contracts {
+		if c.Type == "Bounty" {
+			bountyID = id
+			break
+		}
+	}
+	if bountyID == "" {
+		t.Fatalf("expected bounty contract issued")
+	}
+
+	handleActionLocked(s, hunter, now, "accept", bountyID)
+	handleActionLocked(s, hunter, now, "deliver", bountyID)
+	if s.Contracts[bountyID].Status != "Accepted" {
+		t.Fatalf("bounty should remain accepted without evidence, got %s", s.Contracts[bountyID].Status)
+	}
+
+	addEvidenceLocked(s, hunter, target, "corruption", 6, 5)
+	handleActionLocked(s, hunter, now.Add(2*time.Second), "deliver", bountyID)
+	if s.Contracts[bountyID].Status != "Completed" {
+		t.Fatalf("bounty should complete after evidence delivery, got %s", s.Contracts[bountyID].Status)
+	}
+	if target.Heat != 7 {
+		t.Fatalf("bounty should reduce target heat, got %d", target.Heat)
+	}
+	if hunter.Gold <= 20 {
+		t.Fatalf("bounty should pay hunter, got %d", hunter.Gold)
 	}
 }
 
