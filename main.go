@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
 	"encoding/base64"
 	"fmt"
 	"html/template"
@@ -92,6 +93,8 @@ const (
 	inquestRumorCredibilityDrop = 2
 	inquestRumorSpreadDrop      = 3
 	inquestRumorDecayDrop       = 2
+	adminResetConfirmPhrase     = "RESET WORLD"
+	adminMaxManualTicks         = 24
 )
 
 type WorldState struct {
@@ -438,6 +441,38 @@ type Store struct {
 	LastCleanupDate   string
 
 	rng *mathrand.Rand
+}
+
+type AdminDiagnostics struct {
+	TotalPlayers             int      `json:"total_players"`
+	OnlinePlayers            int      `json:"online_players"`
+	TravelingPlayers         int      `json:"traveling_players"`
+	TotalGold                int      `json:"total_gold"`
+	TotalGrain               int      `json:"total_grain"`
+	AvgGoldPerPlayer         int      `json:"avg_gold_per_player"`
+	AvgGrainPerPlayer        int      `json:"avg_grain_per_player"`
+	AvgRep                   int      `json:"avg_rep"`
+	AvgHeat                  int      `json:"avg_heat"`
+	RichestPlayer            string   `json:"richest_player"`
+	RichestGold              int      `json:"richest_gold"`
+	RichestSharePct          int      `json:"richest_share_pct"`
+	HottestPlayer            string   `json:"hottest_player"`
+	HottestHeat              int      `json:"hottest_heat"`
+	HighestRepPlayer         string   `json:"highest_rep_player"`
+	HighestRep               int      `json:"highest_rep"`
+	LowestRepPlayer          string   `json:"lowest_rep_player"`
+	LowestRep                int      `json:"lowest_rep"`
+	ContractsIssued          int      `json:"contracts_issued"`
+	ContractsAccepted        int      `json:"contracts_accepted"`
+	ContractsFulfilled       int      `json:"contracts_fulfilled"`
+	ContractsFailed          int      `json:"contracts_failed"`
+	OverdueActiveContracts   int      `json:"overdue_active_contracts"`
+	ContractStateAnomalies   int      `json:"contract_state_anomalies"`
+	OverdueActiveLoans       int      `json:"overdue_active_loans"`
+	OverdueOpenObligations   int      `json:"overdue_open_obligations"`
+	WorldPressureLevel       string   `json:"world_pressure_level"`
+	AlertCount               int      `json:"alert_count"`
+	Alerts                   []string `json:"alerts"`
 }
 
 type PlayerSummary struct {
@@ -1142,13 +1177,65 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		store.mu.Lock()
 		defer store.mu.Unlock()
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = fmt.Fprintf(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Admin</title><style>body{font-family:ui-sans-serif,system-ui;background:#0b0f14;color:#e5ecf4;padding:24px}pre{background:#121923;border:1px solid #2a3442;padding:12px;border-radius:8px;overflow:auto}button{background:#1f6feb;color:#fff;border:0;padding:8px 12px;border-radius:6px;margin-right:8px;cursor:pointer}</style></head><body>")
-		_, _ = fmt.Fprintf(w, "<h1>Admin</h1><p>Persistent realm state enabled via DB_DIALECT.</p>")
-		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/tick\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><button type=\"submit\">Force Tick</button></form>", template.HTMLEscapeString(csrfToken))
-		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/reset\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><button type=\"submit\">Reset World</button></form>", template.HTMLEscapeString(csrfToken))
-
+		openContracts := 0
+		acceptedContracts := 0
+		failedContracts := 0
+		for _, c := range store.Contracts {
+			switch c.Status {
+			case "Issued":
+				openContracts++
+			case "Accepted":
+				acceptedContracts++
+			case "Failed":
+				failedContracts++
+			}
+		}
+		players := make([]*Player, 0, len(store.Players))
+		for _, p := range store.Players {
+			players = append(players, p)
+		}
+		sort.Slice(players, func(i, j int) bool {
+			if players[i].Heat != players[j].Heat {
+				return players[i].Heat > players[j].Heat
+			}
+			return players[i].Name < players[j].Name
+		})
+		if len(players) > 8 {
+			players = players[:8]
+		}
 		online := onlinePlayersLocked(store, time.Now().UTC())
+		diag := buildAdminDiagnosticsLocked(store, time.Now().UTC())
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Admin</title><style>body{font-family:ui-sans-serif,system-ui;background:#0b0f14;color:#e5ecf4;padding:24px;line-height:1.45}.muted{color:#9aa8bb}.row{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}.card{background:#121923;border:1px solid #2a3442;padding:12px;border-radius:8px;min-width:140px}h1,h2,h3{margin:0 0 8px}pre{background:#121923;border:1px solid #2a3442;padding:12px;border-radius:8px;overflow:auto}button{background:#1f6feb;color:#fff;border:0;padding:8px 12px;border-radius:6px;margin-right:8px;cursor:pointer}button.warn{background:#a11f32}input,select{background:#0e141d;color:#e5ecf4;border:1px solid #2a3442;border-radius:6px;padding:6px 8px;margin-right:8px}table{border-collapse:collapse;width:100%;max-width:720px;background:#121923;border:1px solid #2a3442;border-radius:8px;overflow:hidden}th,td{border-bottom:1px solid #2a3442;padding:8px;text-align:left}th{background:#0e141d}</style></head><body>")
+		_, _ = fmt.Fprintf(w, "<h1>Admin</h1><p>Persistent realm state enabled via DB_DIALECT.</p>")
+		_, _ = fmt.Fprintf(w, "<p><a href=\"/admin/state\" style=\"color:#9fc1ff\">Download state snapshot (JSON)</a></p>")
+		_, _ = fmt.Fprintf(w, "<div class=\"row\"><div class=\"card\"><div class=\"muted\">Day</div><div>%d %s</div></div><div class=\"card\"><div class=\"muted\">Ticks</div><div>%d</div></div><div class=\"card\"><div class=\"muted\">Players</div><div>%d</div></div><div class=\"card\"><div class=\"muted\">Online</div><div>%d</div></div><div class=\"card\"><div class=\"muted\">Contracts</div><div>%d open / %d accepted</div></div><div class=\"card\"><div class=\"muted\">Failures</div><div>%d</div></div></div>",
+			store.World.DayNumber, template.HTMLEscapeString(store.World.Subphase), store.TickCount, len(store.Players), len(online), openContracts, acceptedContracts, failedContracts)
+		_, _ = fmt.Fprintf(w, "<h2>Controls</h2><form method=\"post\" action=\"/admin/tick\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><label for=\"tick_count\">Advance ticks:</label><input id=\"tick_count\" name=\"tick_count\" type=\"number\" min=\"1\" max=\"%d\" value=\"1\"><button type=\"submit\">Run</button></form>", template.HTMLEscapeString(csrfToken), adminMaxManualTicks)
+		_, _ = fmt.Fprintf(w, "<form method=\"post\" action=\"/admin/reset\" style=\"margin-top:10px\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><label for=\"confirm_reset\">Type %q:</label><input id=\"confirm_reset\" name=\"confirm\" type=\"text\" autocomplete=\"off\"><button class=\"warn\" type=\"submit\">Reset World</button></form>", template.HTMLEscapeString(csrfToken), adminResetConfirmPhrase)
+		_, _ = fmt.Fprintf(w, "<p class=\"muted\">Reset is destructive and clears players, contracts, intel, and history.</p>")
+		_, _ = fmt.Fprintf(w, "<h2>Anomaly &amp; Balance Summary</h2><pre>Total players: %d (online %d, traveling %d)\nEconomy: gold=%d grain=%d avg_gold=%d avg_grain=%d\nStanding: avg_rep=%d avg_heat=%d hottest=%s (%d)\nContracts: issued=%d accepted=%d fulfilled=%d failed=%d overdue_active=%d anomalies=%d\nDebt pressure: overdue_loans=%d overdue_obligations=%d\nWorld pressure: %s\nAlerts (%d):\n",
+			diag.TotalPlayers, diag.OnlinePlayers, diag.TravelingPlayers,
+			diag.TotalGold, diag.TotalGrain, diag.AvgGoldPerPlayer, diag.AvgGrainPerPlayer,
+			diag.AvgRep, diag.AvgHeat, template.HTMLEscapeString(diag.HottestPlayer), diag.HottestHeat,
+			diag.ContractsIssued, diag.ContractsAccepted, diag.ContractsFulfilled, diag.ContractsFailed, diag.OverdueActiveContracts, diag.ContractStateAnomalies,
+			diag.OverdueActiveLoans, diag.OverdueOpenObligations, template.HTMLEscapeString(diag.WorldPressureLevel), diag.AlertCount)
+		for _, alert := range diag.Alerts {
+			_, _ = fmt.Fprintf(w, " - %s\n", template.HTMLEscapeString(alert))
+		}
+		_, _ = fmt.Fprintf(w, "</pre>")
+		_, _ = fmt.Fprintf(w, "<h2>Hot Players</h2><table><thead><tr><th>Name</th><th>Heat</th><th>Rep</th><th>Gold</th><th>Travel</th></tr></thead><tbody>")
+		for _, p := range players {
+			travel := "No"
+			if p.TravelTicksLeft > 0 {
+				travel = fmt.Sprintf("Yes (%d)", p.TravelTicksLeft)
+			}
+			_, _ = fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>",
+				template.HTMLEscapeString(p.Name), p.Heat, p.Rep, p.Gold, template.HTMLEscapeString(travel))
+		}
+		_, _ = fmt.Fprintf(w, "</tbody></table>")
+
 		_, _ = fmt.Fprintf(w, "<h2>World</h2><pre>%+v</pre>", store.World)
 		_, _ = fmt.Fprintf(w, "<h2>Active Crisis</h2><pre>%+v</pre>", store.ActiveCrisis)
 		_, _ = fmt.Fprintf(w, "<h2>Active Contracts</h2><pre>")
@@ -1162,6 +1249,51 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			_, _ = fmt.Fprintf(w, "%s (%s) Gold:%d Rep:%d\n", p.Name, reputationTitle(p.Rep), p.Gold, p.Rep)
 		}
 		_, _ = fmt.Fprintf(w, "</pre></body></html>")
+	})
+
+	mux.HandleFunc("/admin/state", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isAdmin(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		payload := map[string]any{
+			"generated_at": time.Now().UTC().Format(time.RFC3339),
+			"tick_count":   store.TickCount,
+			"world":        store.World,
+			"active_crisis": store.ActiveCrisis,
+			"diagnostics":  buildAdminDiagnosticsLocked(store, time.Now().UTC()),
+			"counts": map[string]int{
+				"players":      len(store.Players),
+				"contracts":    len(store.Contracts),
+				"events":       len(store.Events),
+				"messages":     len(store.Messages),
+				"chat":         len(store.Chat),
+				"projects":     len(store.Projects),
+				"warrants":     len(store.Warrants),
+				"permits":      len(store.Permits),
+				"loans":        len(store.Loans),
+				"obligations":  len(store.Obligations),
+				"rumors":       len(store.Rumors),
+				"evidence":     len(store.Evidence),
+				"scry_reports": len(store.ScryReports),
+				"intercepts":   len(store.Intercepts),
+			},
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(payload); err != nil {
+			http.Error(w, "failed to encode state", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	mux.HandleFunc("/admin/tick", func(w http.ResponseWriter, r *http.Request) {
@@ -1180,7 +1312,20 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		store.mu.Lock()
 		defer store.mu.Unlock()
 		defer store.persistLocked()
-		runWorldTickLocked(store, time.Now().UTC())
+		n := 1
+		if raw := strings.TrimSpace(r.FormValue("tick_count")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				n = parsed
+			}
+		}
+		if n > adminMaxManualTicks {
+			n = adminMaxManualTicks
+		}
+		now := time.Now().UTC()
+		for i := 0; i < n; i++ {
+			runWorldTickLocked(store, now)
+		}
+		store.LastTickAt = now
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
 
@@ -1200,6 +1345,10 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		store.mu.Lock()
 		defer store.mu.Unlock()
 		defer store.persistLocked()
+		if strings.TrimSpace(r.FormValue("confirm")) != adminResetConfirmPhrase {
+			http.Error(w, "missing reset confirmation phrase", http.StatusBadRequest)
+			return
+		}
 		resetStoreLocked(store)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
@@ -5070,6 +5219,125 @@ func validateAdminCSRF(r *http.Request) bool {
 		provided = strings.TrimSpace(r.FormValue("csrf_token"))
 	}
 	return secureStringEqual(provided, c.Value)
+}
+
+func buildAdminDiagnosticsLocked(store *Store, now time.Time) AdminDiagnostics {
+	diag := AdminDiagnostics{
+		TotalPlayers:      len(store.Players),
+		OnlinePlayers:     len(onlinePlayersLocked(store, now)),
+		WorldPressureLevel: "Normal",
+		Alerts:            []string{},
+	}
+	if store.World.GrainTier == "Critical" || store.World.UnrestTier == "Unstable" {
+		diag.WorldPressureLevel = "Severe"
+	} else if store.World.GrainTier == "Scarce" || store.World.UnrestTier == "Uneasy" {
+		diag.WorldPressureLevel = "Elevated"
+	}
+
+	repSum := 0
+	heatSum := 0
+	richestShareBase := 0
+	for _, p := range store.Players {
+		diag.TotalGold += p.Gold
+		diag.TotalGrain += p.Grain
+		repSum += p.Rep
+		heatSum += p.Heat
+		if p.TravelTicksLeft > 0 {
+			diag.TravelingPlayers++
+		}
+		if p.Gold > diag.RichestGold {
+			diag.RichestGold = p.Gold
+			diag.RichestPlayer = p.Name
+		}
+		if diag.HottestPlayer == "" || p.Heat > diag.HottestHeat {
+			diag.HottestHeat = p.Heat
+			diag.HottestPlayer = p.Name
+		}
+		if diag.HighestRepPlayer == "" || p.Rep > diag.HighestRep {
+			diag.HighestRep = p.Rep
+			diag.HighestRepPlayer = p.Name
+		}
+		if diag.LowestRepPlayer == "" || p.Rep < diag.LowestRep {
+			diag.LowestRep = p.Rep
+			diag.LowestRepPlayer = p.Name
+		}
+		if p.Gold > 0 {
+			richestShareBase += p.Gold
+		}
+	}
+
+	if diag.TotalPlayers > 0 {
+		diag.AvgGoldPerPlayer = diag.TotalGold / diag.TotalPlayers
+		diag.AvgGrainPerPlayer = diag.TotalGrain / diag.TotalPlayers
+		diag.AvgRep = repSum / diag.TotalPlayers
+		diag.AvgHeat = heatSum / diag.TotalPlayers
+	}
+	if richestShareBase > 0 && diag.RichestGold > 0 {
+		diag.RichestSharePct = (diag.RichestGold * 100) / richestShareBase
+	}
+
+	for _, c := range store.Contracts {
+		switch c.Status {
+		case "Issued":
+			diag.ContractsIssued++
+		case "Accepted":
+			diag.ContractsAccepted++
+		case "Fulfilled":
+			diag.ContractsFulfilled++
+		case "Failed":
+			diag.ContractsFailed++
+		}
+		if (c.Status == "Issued" || c.Status == "Accepted") && c.DeadlineTicks <= 0 {
+			diag.OverdueActiveContracts++
+		}
+		if c.Status == "Accepted" && c.OwnerPlayerID == "" {
+			diag.ContractStateAnomalies++
+		}
+		if c.Status == "Issued" && c.OwnerPlayerID != "" {
+			diag.ContractStateAnomalies++
+		}
+	}
+
+	for _, loan := range store.Loans {
+		if loan.Status == "Active" && loan.Remaining > 0 && loan.DueTick < store.TickCount {
+			diag.OverdueActiveLoans++
+		}
+	}
+	for _, ob := range store.Obligations {
+		if ob.Status == "Open" && ob.DueTick < store.TickCount {
+			diag.OverdueOpenObligations++
+		}
+	}
+
+	if diag.WorldPressureLevel == "Severe" {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("World pressure is severe (grain=%s unrest=%s).", store.World.GrainTier, store.World.UnrestTier))
+	}
+	if diag.RichestSharePct >= 60 && diag.TotalPlayers >= 3 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("Wealth concentration high: %s controls %d%% of positive gold.", diag.RichestPlayer, diag.RichestSharePct))
+	}
+	if diag.AvgHeat >= wantedHeatThreshold {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("Average heat is high (%d), enforcement pressure likely too strong.", diag.AvgHeat))
+	}
+	if diag.ContractsFailed >= diag.ContractsFulfilled+3 && diag.ContractsFailed >= 5 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("Contract failure skew: %d failed vs %d fulfilled.", diag.ContractsFailed, diag.ContractsFulfilled))
+	}
+	if diag.OverdueActiveContracts > 0 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("%d active contracts are overdue (deadline <= 0).", diag.OverdueActiveContracts))
+	}
+	if diag.ContractStateAnomalies > 0 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("%d contract ownership inconsistencies detected.", diag.ContractStateAnomalies))
+	}
+	if diag.OverdueActiveLoans > 0 || diag.OverdueOpenObligations > 0 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("Debt backlog: %d overdue loans, %d overdue obligations.", diag.OverdueActiveLoans, diag.OverdueOpenObligations))
+	}
+	if len(store.Warrants) > len(store.Players)/2 && len(store.Players) > 0 {
+		diag.Alerts = append(diag.Alerts, fmt.Sprintf("Warrants cover %d of %d players; legal pressure may be overtuned.", len(store.Warrants), len(store.Players)))
+	}
+	if len(diag.Alerts) == 0 {
+		diag.Alerts = append(diag.Alerts, "No immediate anomaly triggers from baseline checks.")
+	}
+	diag.AlertCount = len(diag.Alerts)
+	return diag
 }
 
 func grainTierFromSupply(v int) string {

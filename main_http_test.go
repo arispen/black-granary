@@ -352,6 +352,9 @@ func TestAdminProtectionTickAndReset(t *testing.T) {
 	if okAdmin.Code != http.StatusOK {
 		t.Fatalf("expected /admin with header token to pass, got %d", okAdmin.Code)
 	}
+	if !strings.Contains(okAdmin.Body.String(), "Anomaly &amp; Balance Summary") {
+		t.Fatalf("admin page should render diagnostics summary")
+	}
 	adminCookie := cookieFromResponse(okAdmin, adminAuthCookieName)
 	csrfCookie := cookieFromResponse(okAdmin, adminCSRFCookieName)
 	if adminCookie == "" || csrfCookie == "" {
@@ -386,7 +389,48 @@ func TestAdminProtectionTickAndReset(t *testing.T) {
 	}
 	s.mu.Unlock()
 
-	resetReq := httptest.NewRequest(http.MethodPost, "/admin/reset", strings.NewReader(url.Values{"csrf_token": {csrfCookie}}.Encode()))
+	multiTickReq := httptest.NewRequest(http.MethodPost, "/admin/tick", strings.NewReader(url.Values{"csrf_token": {csrfCookie}, "tick_count": {"3"}}.Encode()))
+	multiTickReq.RemoteAddr = "203.0.113.10:9999"
+	multiTickReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	multiTickReq.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
+	multiTickReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	multiTickResp := httptest.NewRecorder()
+	mux.ServeHTTP(multiTickResp, multiTickReq)
+	if multiTickResp.Code != http.StatusSeeOther {
+		t.Fatalf("expected /admin/tick redirect for batch tick, got %d", multiTickResp.Code)
+	}
+	s.mu.Lock()
+	if s.TickCount != prevTick+4 {
+		s.mu.Unlock()
+		t.Fatalf("batch admin tick should increment TickCount by requested amount")
+	}
+	s.mu.Unlock()
+
+	stateReq := httptest.NewRequest(http.MethodGet, "/admin/state", nil)
+	stateReq.RemoteAddr = "203.0.113.10:9999"
+	stateReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	stateResp := httptest.NewRecorder()
+	mux.ServeHTTP(stateResp, stateReq)
+	if stateResp.Code != http.StatusOK {
+		t.Fatalf("expected /admin/state with auth cookie to pass, got %d", stateResp.Code)
+	}
+	stateBody := stateResp.Body.String()
+	if !strings.Contains(stateBody, "\"tick_count\"") || !strings.Contains(stateBody, "\"counts\"") || !strings.Contains(stateBody, "\"diagnostics\"") {
+		t.Fatalf("state payload missing expected fields: %s", stateBody)
+	}
+
+	resetNoConfirmReq := httptest.NewRequest(http.MethodPost, "/admin/reset", strings.NewReader(url.Values{"csrf_token": {csrfCookie}}.Encode()))
+	resetNoConfirmReq.RemoteAddr = "203.0.113.10:9999"
+	resetNoConfirmReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	resetNoConfirmReq.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
+	resetNoConfirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resetNoConfirmResp := httptest.NewRecorder()
+	mux.ServeHTTP(resetNoConfirmResp, resetNoConfirmReq)
+	if resetNoConfirmResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected /admin/reset bad request without confirmation phrase, got %d", resetNoConfirmResp.Code)
+	}
+
+	resetReq := httptest.NewRequest(http.MethodPost, "/admin/reset", strings.NewReader(url.Values{"csrf_token": {csrfCookie}, "confirm": {adminResetConfirmPhrase}}.Encode()))
 	resetReq.RemoteAddr = "203.0.113.10:9999"
 	resetReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
 	resetReq.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
