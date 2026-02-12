@@ -7,6 +7,10 @@
     </select>
     <input type="text" name="subject" value="{{ .MessageDraftSubject }}" placeholder="Subject" maxlength="80" autocomplete="off">
     <textarea name="body" rows="3" placeholder="Message" maxlength="260">{{ .MessageDraftBody }}</textarea>
+    <div class="muted" style="margin-top:6px;">
+      <label><input type="checkbox" name="sealed" value="1" {{ if .MessageDraftSealed }}checked{{ end }} {{ if .SealMessageDisabled }}disabled{{ end }}> Seal missive ({{ .SealMessageCost }}g)</label>
+      {{ if .SealMessageDisabledNote }}<span class="muted" style="margin-left:6px;">{{ .SealMessageDisabledNote }}</span>{{ end }}
+    </div>
     <button type="submit">Send Message</button>
   </form>
 {{ else }}
@@ -16,7 +20,7 @@
 <div class="events" style="max-height:200px;">
   {{ range .Messages }}
     <div class="event-line">
-      <div class="event-meta">{{ .At }} · {{ if eq .Direction "Sent" }}to {{ .ToName }}{{ else }}from {{ .FromName }}{{ end }} · {{ .Direction }}</div>
+      <div class="event-meta">{{ .At }} · {{ if eq .Direction "Sent" }}to {{ .ToName }}{{ else }}from {{ .FromName }}{{ end }} · {{ .Direction }}{{ if .Sealed }} · sealed{{ end }}</div>
       <div><strong>{{ .Subject }}</strong></div>
       <div>{{ .Body }}</div>
     </div>

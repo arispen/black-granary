@@ -370,6 +370,41 @@ func TestInterceptCourierCapturesMessage(t *testing.T) {
 	}
 }
 
+func TestSealedInterceptRedactsContent(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	owner := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[owner.ID] = owner
+
+	msg := &DiplomaticMessage{
+		ID:           1,
+		FromPlayerID: "p2",
+		FromName:     "Bran Vale (Guest)",
+		ToPlayerID:   "p3",
+		ToName:       "Corin Thorne (Guest)",
+		Subject:      "Hidden route",
+		Body:         "Meet at the quay.",
+		At:           now,
+		Sealed:       true,
+	}
+	s.TickCount = 4
+	addInterceptLocked(s, owner, msg)
+
+	data := buildPageDataLocked(s, owner.ID, false)
+	if len(data.Intercepts) != 1 {
+		t.Fatalf("expected intercept view to be built")
+	}
+	if !data.Intercepts[0].Sealed {
+		t.Fatalf("expected intercept to be marked sealed")
+	}
+	if data.Intercepts[0].Subject == msg.Subject {
+		t.Fatalf("expected sealed intercept subject to be redacted")
+	}
+	if data.Intercepts[0].Body == msg.Body {
+		t.Fatalf("expected sealed intercept body to be redacted")
+	}
+}
+
 func TestInterceptExpires(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
@@ -394,6 +429,20 @@ func TestInterceptExpires(t *testing.T) {
 	processIntelTickLocked(s, now)
 	if len(s.Intercepts) != 0 {
 		t.Fatalf("expected intercepts to expire on tick")
+	}
+}
+
+func TestThreatenExposureWithoutEvidenceDoesNotConsumeHighImpact(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	actor := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 10, Rep: 0, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 10, Rep: 0, LastSeen: now}
+	s.Players[actor.ID] = actor
+	s.Players[target.ID] = target
+
+	handleActionInputLocked(s, actor, now, ActionInput{Action: "threaten_exposure", TargetID: target.ID})
+	if s.DailyHighImpactN[actor.ID] != 0 {
+		t.Fatalf("expected high-impact budget to remain unused")
 	}
 }
 

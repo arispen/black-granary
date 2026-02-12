@@ -106,7 +106,7 @@
 <div class="events" style="max-height:140px;">
   {{ range .Intercepts }}
     <div class="event-line">
-      <div class="event-meta">{{ .At }} · {{ .FromName }} -> {{ .ToName }} · expires {{ .ExpiryIn }}</div>
+      <div class="event-meta">{{ .At }} · {{ .FromName }} -> {{ .ToName }} · expires {{ .ExpiryIn }}{{ if .Sealed }} · sealed{{ end }}</div>
       <div><strong>{{ .Subject }}</strong></div>
       <div>{{ .Body }}</div>
     </div>

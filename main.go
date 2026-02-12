@@ -70,6 +70,8 @@ const (
 	forgeEvidenceDurationTicks  = 3
 	bribeAccessBaseTicks        = 2
 	bribeAccessMaxTicks         = 5
+	sealedMessageCost           = 2
+	sealedInterceptPenalty      = 15
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -162,6 +164,7 @@ type DiplomaticMessage struct {
 	Subject      string
 	Body         string
 	At           time.Time
+	Sealed       bool
 }
 
 type InterceptedMessage struct {
@@ -174,6 +177,7 @@ type InterceptedMessage struct {
 	Body          string
 	At            time.Time
 	ExpiryTick    int64
+	Sealed        bool
 }
 
 type Institution struct {
@@ -478,6 +482,7 @@ type MessageView struct {
 	Body      string
 	Direction string
 	At        string
+	Sealed    bool
 }
 
 type SeatView struct {
@@ -539,6 +544,7 @@ type InterceptView struct {
 	Body     string
 	At       string
 	ExpiryIn int64
+	Sealed   bool
 }
 
 type LoanView struct {
@@ -663,6 +669,10 @@ type PageData struct {
 	MessageDraftSubject     string
 	MessageDraftBody        string
 	MessageDraftTargetID    string
+	MessageDraftSealed      bool
+	SealMessageCost         int
+	SealMessageDisabled     bool
+	SealMessageDisabledNote string
 	Toast                   string
 	AcceptedCount           int
 	VisibleContractN        int
@@ -982,11 +992,13 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		targetID := strings.TrimSpace(r.FormValue("target_id"))
 		subject := strings.TrimSpace(r.FormValue("subject"))
 		body := strings.TrimSpace(r.FormValue("body"))
+		sealed := strings.TrimSpace(r.FormValue("sealed")) != ""
 
 		data := buildPageDataLocked(store, p.ID, true)
 		data.MessageDraftTargetID = targetID
 		data.MessageDraftSubject = subject
 		data.MessageDraftBody = body
+		data.MessageDraftSealed = sealed
 
 		if tooSoon(store.LastMessageAt[p.ID], now, messageCooldown) {
 			setToastLocked(store, p.ID, "Couriers need more time to return.")
@@ -1020,8 +1032,16 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			renderActionLikeResponse(w, tmpl, data, false)
 			return
 		}
+		if sealed && p.Gold < sealedMessageCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to seal a missive.", sealedMessageCost))
+			renderActionLikeResponse(w, tmpl, data, false)
+			return
+		}
 
 		store.LastMessageAt[p.ID] = now
+		if sealed {
+			p.Gold -= sealedMessageCost
+		}
 		addDiplomacyMessageLocked(store, DiplomaticMessage{
 			FromPlayerID: p.ID,
 			FromName:     p.Name,
@@ -1030,6 +1050,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			Subject:      subject,
 			Body:         body,
 			At:           now,
+			Sealed:       sealed,
 		})
 		setToastLocked(store, p.ID, fmt.Sprintf("Courier dispatched to %s.", target.Name))
 		setToastLocked(store, target.ID, fmt.Sprintf("A courier arrives from %s.", p.Name))
@@ -2044,6 +2065,7 @@ func addInterceptLocked(store *Store, owner *Player, msg *DiplomaticMessage) {
 		Body:          msg.Body,
 		At:            msg.At,
 		ExpiryTick:    store.TickCount + interceptDurationTicks,
+		Sealed:        msg.Sealed,
 	}
 }
 
@@ -2615,6 +2637,9 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		if store.World.WardNetworkTicks > 0 {
 			successChance = maxInt(10, successChance-10)
 		}
+		if msg.Sealed {
+			successChance = maxInt(10, successChance-sealedInterceptPenalty)
+		}
 		if rollPercent(store.rng, minInt(successChance, 85)) {
 			addInterceptLocked(store, p, msg)
 			addEventLocked(store, Event{
@@ -2623,7 +2648,11 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 				Text:     fmt.Sprintf("[%s] intercepts a courier bound for [%s].", p.Name, target.Name),
 				At:       now,
 			})
-			setToastLocked(store, p.ID, "Courier intercepted; missive logged.")
+			if msg.Sealed {
+				setToastLocked(store, p.ID, "Courier intercepted; the seal holds.")
+			} else {
+				setToastLocked(store, p.ID, "Courier intercepted; missive logged.")
+			}
 		} else {
 			p.Rep = clampInt(p.Rep-1, -100, 100)
 			p.Heat = clampInt(p.Heat+1, 0, 20)
@@ -2856,13 +2885,13 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "Choose a valid target.")
 			return
 		}
-		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
-			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
-			return
-		}
 		ev := strongestEvidenceForLocked(store, p.ID, target.ID)
 		if ev == nil {
 			setToastLocked(store, p.ID, "You need evidence before threatening exposure.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
 			return
 		}
 		payout := minInt(6, maxInt(2, target.Gold/3))
@@ -4057,6 +4086,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			Body:      m.Body,
 			Direction: direction,
 			At:        m.At.Format("15:04:05"),
+			Sealed:    m.Sealed,
 		})
 	}
 	if len(messages) > maxVisibleMessages {
@@ -4072,6 +4102,12 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	sort.Slice(playerOptions, func(i, j int) bool { return playerOptions[i].Name < playerOptions[j].Name })
 	hasOtherPlayers := len(playerOptions) > 0
+	sealMessageDisabled := false
+	sealMessageNote := ""
+	if p.Gold < sealedMessageCost {
+		sealMessageDisabled = true
+		sealMessageNote = fmt.Sprintf("Need %dg to seal a missive.", sealedMessageCost)
+	}
 
 	seatOrder := []string{"harbor_master", "master_of_coin", "high_curate"}
 	seats := make([]SeatView, 0, len(seatOrder))
@@ -4251,14 +4287,21 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if intercept.OwnerPlayerID != p.ID {
 			continue
 		}
+		subject := intercept.Subject
+		body := intercept.Body
+		if intercept.Sealed {
+			subject = "Sealed missive"
+			body = "Ciphered script resists your agents."
+		}
 		intercepts = append(intercepts, InterceptView{
 			ID:       intercept.ID,
 			FromName: intercept.FromName,
 			ToName:   intercept.ToName,
-			Subject:  intercept.Subject,
-			Body:     intercept.Body,
+			Subject:  subject,
+			Body:     body,
 			At:       intercept.At.Format("15:04:05"),
 			ExpiryIn: int64(maxInt(0, int(intercept.ExpiryTick-store.TickCount))),
+			Sealed:   intercept.Sealed,
 		})
 	}
 	sort.Slice(intercepts, func(i, j int) bool { return intercepts[i].ID > intercepts[j].ID })
@@ -4558,6 +4601,9 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Players:                 players,
 		Chat:                    chat,
 		Messages:                messages,
+		SealMessageCost:         sealedMessageCost,
+		SealMessageDisabled:     sealMessageDisabled,
+		SealMessageDisabledNote: sealMessageNote,
 		Toast:                   toast,
 		AcceptedCount:           playerAcceptedCountLocked(store, playerID),
 		VisibleContractN:        len(contracts),

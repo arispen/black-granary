@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.19.0
+- Added sealed missives to diplomacy with a gold cost and seal indicators.
+- Courier intercepts now penalize sealed messages and redact sealed intel.
+- Threaten exposure no longer consumes high-impact budget without evidence.
+
 ## 0.18.0
 - Bribes now grant temporary corrupt access that bypasses permits and embargoes.
 - Contract cards surface embargo/permit requirements plus bribed access notes.
