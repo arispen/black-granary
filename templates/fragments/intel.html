@@ -30,6 +30,16 @@
     </select>
     <button class="secondary" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Publish Evidence</button>
   </form>
+  {{ if .ForgeEvidenceReason }}
+    <div class="muted" style="margin-top:4px;">{{ .ForgeEvidenceReason }}</div>
+  {{ end }}
+  <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+    <input type="hidden" name="action" value="forge_evidence">
+    <select name="target_id" aria-label="Forge target" {{ if $.Traveling }}disabled{{ end }}>
+      {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+    </select>
+    <button class="warn" type="submit" {{ if .ForgeEvidenceDisabled }}disabled{{ end }}>Forge Evidence ({{ .ForgeEvidenceCost }}g)</button>
+  </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="scry_target">
     <select name="target_id" aria-label="Scry target" {{ if $.Traveling }}disabled{{ end }}>
@@ -80,7 +90,7 @@
 <div class="muted" style="margin-top:8px;">Your Evidence</div>
 <div class="events" style="max-height:140px;">
   {{ range .Evidence }}
-    <div class="event-line"><div class="event-meta">{{ .TargetName }} · {{ .Topic }} · str {{ .Strength }} · expires {{ .ExpiryIn }}</div></div>
+    <div class="event-line"><div class="event-meta">{{ .TargetName }} · {{ .Topic }} · str {{ .Strength }} · {{ .SourceNote }} · expires {{ .ExpiryIn }}t</div></div>
   {{ else }}<div class="muted">No evidence held.</div>{{ end }}
 </div>
 <div class="muted" style="margin-top:8px;">Scrying Reports</div>

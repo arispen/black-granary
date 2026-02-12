@@ -66,6 +66,8 @@ const (
 	relicMaxVisible             = 6
 	scryReportDurationTicks     = 3
 	interceptDurationTicks      = 3
+	forgeEvidenceCost           = 3
+	forgeEvidenceDurationTicks  = 3
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -211,6 +213,7 @@ type Evidence struct {
 	SourceName     string
 	Strength       int
 	ExpiryTick     int64
+	Forged         bool
 }
 
 type ScryReport struct {
@@ -505,6 +508,7 @@ type EvidenceView struct {
 	SourceName string
 	Strength   int
 	ExpiryIn   int64
+	SourceNote string
 }
 
 type ScryReportView struct {
@@ -661,6 +665,9 @@ type PageData struct {
 	Evidence                []EvidenceView
 	ScryReports             []ScryReportView
 	Intercepts              []InterceptView
+	ForgeEvidenceCost       int
+	ForgeEvidenceDisabled   bool
+	ForgeEvidenceReason     string
 	Loans                   []LoanView
 	Obligations             []ObligationView
 	Permits                 []PermitView
@@ -1966,7 +1973,7 @@ func addRumorLocked(store *Store, r *Rumor, now time.Time) {
 	})
 }
 
-func addEvidenceLocked(store *Store, source *Player, target *Player, topic string, strength int, ttlTicks int64) {
+func addEvidenceLocked(store *Store, source *Player, target *Player, topic string, strength int, ttlTicks int64, forged bool) {
 	if source == nil || target == nil {
 		return
 	}
@@ -1981,6 +1988,7 @@ func addEvidenceLocked(store *Store, source *Player, target *Player, topic strin
 		SourceName:     source.Name,
 		Strength:       clampInt(strength, 1, 10),
 		ExpiryTick:     store.TickCount + ttlTicks,
+		Forged:         forged,
 	}
 }
 
@@ -2398,7 +2406,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			addEventLocked(store, Event{Type: "Player", Severity: 2, Text: fmt.Sprintf("[%s] investigates rumors along the supply routes.", p.Name), At: now})
 			if in.TargetID != "" {
 				if target := store.Players[in.TargetID]; target != nil && target.ID != p.ID {
-					addEvidenceLocked(store, p, target, chooseTopic(in.Topic, "corruption"), 5+maxInt(0, p.Rep/25), 5)
+					addEvidenceLocked(store, p, target, chooseTopic(in.Topic, "corruption"), 5+maxInt(0, p.Rep/25), 5, false)
 					setToastLocked(store, p.ID, "Your investigation found evidence.")
 					break
 				}
@@ -2407,6 +2415,48 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		} else {
 			addEventLocked(store, Event{Type: "Player", Severity: 1, Text: fmt.Sprintf("[%s] investigates rumors along the supply routes.", p.Name), At: now})
 			setToastLocked(store, p.ID, "You find only fragments and gossip.")
+		}
+	case "forge_evidence":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target to forge evidence.")
+			return
+		}
+		if tooSoonTick(store.LastIntelActionAt[p.ID], store.TickCount, 1) {
+			setToastLocked(store, p.ID, "Forgery cooldown active.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		if p.Gold < forgeEvidenceCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to forge a dossier.", forgeEvidenceCost))
+			return
+		}
+		store.LastIntelActionAt[p.ID] = store.TickCount
+		p.Gold -= forgeEvidenceCost
+		successChance := 55 + maxInt(0, p.Rep)/3
+		if rollPercent(store.rng, minInt(successChance, 90)) {
+			strength := clampInt(2+maxInt(0, p.Rep)/35, 2, 5)
+			addEvidenceLocked(store, p, target, chooseTopic(in.Topic, "fraud"), strength, forgeEvidenceDurationTicks, true)
+			addEventLocked(store, Event{
+				Type:     "Intel",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] circulates a forged dossier on [%s].", p.Name, target.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Forgery completed. Evidence added to your dossier.")
+		} else {
+			p.Rep = clampInt(p.Rep-3, -100, 100)
+			p.Heat = clampInt(p.Heat+2, 0, 20)
+			addEventLocked(store, Event{
+				Type:     "Intel",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] is caught manufacturing evidence.", p.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Forgery exposed; your reputation suffers.")
 		}
 	case "seed_rumor":
 		target := store.Players[in.TargetID]
@@ -3985,6 +4035,18 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	if traveling {
 		travelDestination = locationName(p.TravelToID)
 	}
+	forgeEvidenceDisabled := false
+	forgeEvidenceReason := ""
+	if traveling {
+		forgeEvidenceDisabled = true
+		forgeEvidenceReason = "Traveling."
+	} else if highImpactRemaining == 0 {
+		forgeEvidenceDisabled = true
+		forgeEvidenceReason = "High-impact cap reached."
+	} else if p.Gold < forgeEvidenceCost {
+		forgeEvidenceDisabled = true
+		forgeEvidenceReason = fmt.Sprintf("Need %dg to forge a dossier.", forgeEvidenceCost)
+	}
 	locationOptions := make([]LocationOption, 0, len(locationDefinitions()))
 	for _, def := range locationDefinitions() {
 		if def.ID == p.LocationID {
@@ -4059,6 +4121,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if ev.SourcePlayerID != p.ID {
 			continue
 		}
+		sourceNote := "investigated"
+		if ev.Forged {
+			sourceNote = "forged"
+		}
 		evidence = append(evidence, EvidenceView{
 			ID:         ev.ID,
 			Topic:      ev.Topic,
@@ -4066,6 +4132,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			SourceName: ev.SourceName,
 			Strength:   ev.Strength,
 			ExpiryIn:   int64(maxInt(0, int(ev.ExpiryTick-store.TickCount))),
+			SourceNote: sourceNote,
 		})
 	}
 	sort.Slice(evidence, func(i, j int) bool { return evidence[i].ID > evidence[j].ID })
@@ -4417,6 +4484,9 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Evidence:                evidence,
 		ScryReports:             scryReports,
 		Intercepts:              intercepts,
+		ForgeEvidenceCost:       forgeEvidenceCost,
+		ForgeEvidenceDisabled:   forgeEvidenceDisabled,
+		ForgeEvidenceReason:     forgeEvidenceReason,
 		Loans:                   loans,
 		Obligations:             obligations,
 		Permits:                 permits,

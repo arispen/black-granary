@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.16.0
+- Added forged evidence intel action with costed, short-lived dossiers and failure penalties.
+- Intel panel now labels evidence origin (forged vs investigated) and shows expiry ticks.
+- Forge evidence controls now communicate when high-impact or travel lockouts apply.
+
 ## 0.15.0
 - Added courier intercept intel action that captures short-lived missives.
 - Intel panel now lists intercepted missives with expiry timers.

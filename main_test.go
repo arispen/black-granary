@@ -216,6 +216,59 @@ func TestPublishEvidenceDoesNotConsumeHighImpactWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestForgeEvidenceAddsForgedEvidenceOnSuccess(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	forger := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 12, Rep: 100, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[forger.ID] = forger
+	s.Players[target.ID] = target
+
+	handleActionInputLocked(s, forger, now, ActionInput{Action: "forge_evidence", TargetID: target.ID})
+
+	if forger.Gold != 12-forgeEvidenceCost {
+		t.Fatalf("expected forge to cost %dg, got %d", forgeEvidenceCost, forger.Gold)
+	}
+	if len(s.Evidence) != 1 {
+		t.Fatalf("expected forged evidence to be added")
+	}
+	for _, ev := range s.Evidence {
+		if ev.TargetPlayerID != target.ID || ev.SourcePlayerID != forger.ID {
+			t.Fatalf("evidence should point at target with forger source")
+		}
+		if !ev.Forged {
+			t.Fatalf("evidence should be marked forged")
+		}
+		if ev.Strength <= 0 {
+			t.Fatalf("expected forged evidence to have strength, got %d", ev.Strength)
+		}
+	}
+}
+
+func TestForgeEvidenceFailurePenalizesForger(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	forger := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 12, Rep: 0, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[forger.ID] = forger
+	s.Players[target.ID] = target
+
+	handleActionInputLocked(s, forger, now, ActionInput{Action: "forge_evidence", TargetID: target.ID})
+
+	if forger.Gold != 12-forgeEvidenceCost {
+		t.Fatalf("expected forge attempt to cost %dg, got %d", forgeEvidenceCost, forger.Gold)
+	}
+	if len(s.Evidence) != 0 {
+		t.Fatalf("expected failed forgery to add no evidence")
+	}
+	if forger.Rep != -3 {
+		t.Fatalf("expected forgery failure to drop rep to -3, got %d", forger.Rep)
+	}
+	if forger.Heat != 2 {
+		t.Fatalf("expected forgery failure to add heat 2, got %d", forger.Heat)
+	}
+}
+
 func TestScryReportExpires(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
@@ -703,7 +756,7 @@ func TestBountyDeliveryRequiresEvidence(t *testing.T) {
 		t.Fatalf("bounty should remain accepted without evidence, got %s", s.Contracts[bountyID].Status)
 	}
 
-	addEvidenceLocked(s, hunter, target, "corruption", 6, 5)
+	addEvidenceLocked(s, hunter, target, "corruption", 6, 5, false)
 	handleActionLocked(s, hunter, now.Add(2*time.Second), "deliver", bountyID)
 	if s.Contracts[bountyID].Status != "Completed" {
 		t.Fatalf("bounty should complete after evidence delivery, got %s", s.Contracts[bountyID].Status)
@@ -1110,7 +1163,7 @@ func TestScenarioInformationAttackInstitutionResponseEconomicConsequence(t *test
 	s.Seats["harbor_master"].HolderName = target.Name
 	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
 
-	addEvidenceLocked(s, attacker, target, "corruption", 8, 5)
+	addEvidenceLocked(s, attacker, target, "corruption", 8, 5, false)
 	handleActionInputLocked(s, attacker, now, ActionInput{Action: "publish_evidence", TargetID: target.ID})
 
 	if !s.Policies.PermitRequiredHighRisk {
