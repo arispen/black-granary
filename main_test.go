@@ -199,6 +199,44 @@ func TestInvestigateCooldownByTicks(t *testing.T) {
 	}
 }
 
+func TestPublishEvidenceDoesNotConsumeHighImpactWithoutEvidence(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+	s.Players[target.ID] = target
+
+	s.DailyActionDate[p.ID] = now.Format("2006-01-02")
+	s.DailyHighImpactN[p.ID] = 0
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "publish_evidence", TargetID: target.ID})
+	if s.DailyHighImpactN[p.ID] != 0 {
+		t.Fatalf("expected high-impact budget to remain unused without evidence")
+	}
+}
+
+func TestScryReportExpires(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	owner := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now, LocationID: locationCapital}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 12, Grain: 3, Rep: 4, Heat: 2, LastSeen: now, LocationID: locationHarbor}
+	s.Players[owner.ID] = owner
+	s.Players[target.ID] = target
+
+	s.TickCount = 10
+	addScryReportLocked(s, owner, target)
+	if len(s.ScryReports) != 1 {
+		t.Fatalf("expected scry report to be added")
+	}
+
+	s.TickCount = 10 + scryReportDurationTicks
+	processIntelTickLocked(s, now)
+	if len(s.ScryReports) != 0 {
+		t.Fatalf("expected scry reports to expire on tick")
+	}
+}
+
 func TestRelicAppraisalAndInvocation(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

@@ -25,6 +25,13 @@
     <button class="secondary" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Publish Evidence</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+    <input type="hidden" name="action" value="scry_target">
+    <select name="target_id" aria-label="Scry target">
+      {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+    </select>
+    <button class="secondary" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Scry Target</button>
+  </form>
+  <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="counter_narrative">
     <select name="target_id" aria-label="Counter target">
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
@@ -62,6 +69,15 @@
   {{ range .Evidence }}
     <div class="event-line"><div class="event-meta">{{ .TargetName }} · {{ .Topic }} · str {{ .Strength }} · expires {{ .ExpiryIn }}</div></div>
   {{ else }}<div class="muted">No evidence held.</div>{{ end }}
+</div>
+<div class="muted" style="margin-top:8px;">Scrying Reports</div>
+<div class="events" style="max-height:140px;">
+  {{ range .ScryReports }}
+    <div class="event-line">
+      <div class="event-meta">{{ .TargetName }} · {{ .LocationName }}{{ if .TravelNote }} · {{ .TravelNote }}{{ end }} · expires {{ .ExpiryIn }}</div>
+      <div>Rep {{ .Rep }} · Heat {{ .Heat }} · Gold {{ .Gold }} · Grain {{ .Grain }}</div>
+    </div>
+  {{ else }}<div class="muted">No active scrying reports.</div>{{ end }}
 </div>
 {{ end }}
 

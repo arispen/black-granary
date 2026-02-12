@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.13.0
+- Added scrying intel action that captures short-lived dossiers on other players.
+- Intel panel now lists scrying reports with location, travel, and resource snapshots.
+- Publishing evidence no longer consumes high-impact budget when no evidence exists.
+
 ## 0.12.0
 - Added relic recovery from the Haunted Ruins with Temple appraisals and one-time invocations.
 - Relic dashboard card now shows appraisal status, effects, and action controls.

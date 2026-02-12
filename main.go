@@ -63,6 +63,7 @@ const (
 	permitDurationTicks         = 3
 	relicAppraiseCost           = 4
 	relicMaxVisible             = 6
+	scryReportDurationTicks     = 3
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -197,6 +198,21 @@ type Evidence struct {
 	ExpiryTick     int64
 }
 
+type ScryReport struct {
+	ID              int64
+	OwnerPlayerID   string
+	TargetPlayerID  string
+	TargetName      string
+	LocationID      string
+	TravelToID      string
+	TravelTicksLeft int
+	Rep             int
+	Heat            int
+	Gold            int
+	Grain           int
+	ExpiryTick      int64
+}
+
 type Loan struct {
 	ID               string
 	LenderPlayerID   string
@@ -318,6 +334,7 @@ type Store struct {
 	Policies     PolicyState
 	Rumors       map[int64]*Rumor
 	Evidence     map[int64]*Evidence
+	ScryReports  map[int64]*ScryReport
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
 	Permits      map[string]*Permit
@@ -335,6 +352,7 @@ type Store struct {
 	NextMessageID    int64
 	NextRumorID      int64
 	NextEvidenceID   int64
+	NextScryID       int64
 	NextLoanID       int64
 	NextObligationID int64
 	NextProjectID    int64
@@ -471,6 +489,18 @@ type EvidenceView struct {
 	ExpiryIn   int64
 }
 
+type ScryReportView struct {
+	ID           int64
+	TargetName   string
+	LocationName string
+	TravelNote   string
+	Rep          int
+	Heat         int
+	Gold         int
+	Grain        int
+	ExpiryIn     int64
+}
+
 type LoanView struct {
 	ID           string
 	LenderName   string
@@ -601,6 +631,7 @@ type PageData struct {
 	Policies                PolicyState
 	Rumors                  []RumorView
 	Evidence                []EvidenceView
+	ScryReports             []ScryReportView
 	Loans                   []LoanView
 	Obligations             []ObligationView
 	Permits                 []PermitView
@@ -1057,6 +1088,7 @@ func newStore() *Store {
 		Policies:          PolicyState{TaxRatePct: 0},
 		Rumors:            map[int64]*Rumor{},
 		Evidence:          map[int64]*Evidence{},
+		ScryReports:       map[int64]*ScryReport{},
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
 		Permits:           map[string]*Permit{},
@@ -1106,6 +1138,7 @@ func resetStoreLocked(s *Store) {
 	s.Policies = PolicyState{TaxRatePct: 0}
 	s.Rumors = map[int64]*Rumor{}
 	s.Evidence = map[int64]*Evidence{}
+	s.ScryReports = map[int64]*ScryReport{}
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
 	s.Permits = map[string]*Permit{}
@@ -1121,6 +1154,7 @@ func resetStoreLocked(s *Store) {
 	s.NextMessageID = 0
 	s.NextProjectID = 0
 	s.NextRelicID = 0
+	s.NextScryID = 0
 	s.LastDailyTickDate = ""
 	s.LastTickAt = now
 	s.TickCount = 0
@@ -1509,6 +1543,12 @@ func processIntelTickLocked(store *Store, now time.Time) {
 			delete(store.Evidence, id)
 		}
 	}
+
+	for id, report := range store.ScryReports {
+		if report.ExpiryTick <= store.TickCount {
+			delete(store.ScryReports, id)
+		}
+	}
 }
 
 func processFinanceTickLocked(store *Store, now time.Time) {
@@ -1884,6 +1924,28 @@ func addEvidenceLocked(store *Store, source *Player, target *Player, topic strin
 		SourceName:     source.Name,
 		Strength:       clampInt(strength, 1, 10),
 		ExpiryTick:     store.TickCount + ttlTicks,
+	}
+}
+
+func addScryReportLocked(store *Store, owner *Player, target *Player) {
+	if owner == nil || target == nil {
+		return
+	}
+	store.NextScryID++
+	id := store.NextScryID
+	store.ScryReports[id] = &ScryReport{
+		ID:              id,
+		OwnerPlayerID:   owner.ID,
+		TargetPlayerID:  target.ID,
+		TargetName:      target.Name,
+		LocationID:      target.LocationID,
+		TravelToID:      target.TravelToID,
+		TravelTicksLeft: target.TravelTicksLeft,
+		Rep:             target.Rep,
+		Heat:            target.Heat,
+		Gold:            target.Gold,
+		Grain:           target.Grain,
+		ExpiryTick:      store.TickCount + scryReportDurationTicks,
 	}
 }
 
@@ -2291,13 +2353,13 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "Choose a valid target to publish evidence.")
 			return
 		}
-		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
-			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
-			return
-		}
 		ev := strongestEvidenceForLocked(store, p.ID, target.ID)
 		if ev == nil {
 			setToastLocked(store, p.ID, "You lack evidence on that target.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
 			return
 		}
 		delete(store.Evidence, ev.ID)
@@ -2334,6 +2396,43 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "Counter-narrative slows rumor spread.")
 		} else {
 			setToastLocked(store, p.ID, "No major rumor wave found to counter.")
+		}
+	case "scry_target":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid target to scry.")
+			return
+		}
+		if tooSoonTick(store.LastIntelActionAt[p.ID], store.TickCount, 1) {
+			setToastLocked(store, p.ID, "Scrying cooldown active.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		store.LastIntelActionAt[p.ID] = store.TickCount
+		if target.RiteImmunityTicks > 0 {
+			p.Rep = clampInt(p.Rep-1, -100, 100)
+			setToastLocked(store, p.ID, "Ritual wards deflect your scrying.")
+			setToastLocked(store, target.ID, "Your wards shimmer; someone sought you through the veil.")
+			return
+		}
+		successChance := 45 + maxInt(0, p.Rep)/4
+		if rollPercent(store.rng, minInt(successChance, 85)) {
+			addScryReportLocked(store, p, target)
+			addEventLocked(store, Event{
+				Type:     "Intel",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] completes a scrying report on [%s].", p.Name, target.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Scrying report added to your dossier.")
+		} else {
+			p.Rep = clampInt(p.Rep-2, -100, 100)
+			p.Heat = clampInt(p.Heat+1, 0, 20)
+			setToastLocked(store, p.ID, "The scrying ritual falters and leaves traces.")
+			setToastLocked(store, target.ID, "A scrying attempt brushes past your wards.")
 		}
 	case "loan_offer":
 		target := store.Players[in.TargetID]
@@ -3843,6 +3942,33 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		evidence = evidence[:8]
 	}
 
+	scryReports := make([]ScryReportView, 0, len(store.ScryReports))
+	for _, report := range store.ScryReports {
+		if report.OwnerPlayerID != p.ID {
+			continue
+		}
+		locName := locationName(report.LocationID)
+		travelNote := ""
+		if report.TravelTicksLeft > 0 {
+			travelNote = fmt.Sprintf("En route to %s (%dt left)", locationName(report.TravelToID), report.TravelTicksLeft)
+		}
+		scryReports = append(scryReports, ScryReportView{
+			ID:           report.ID,
+			TargetName:   report.TargetName,
+			LocationName: locName,
+			TravelNote:   travelNote,
+			Rep:          report.Rep,
+			Heat:         report.Heat,
+			Gold:         report.Gold,
+			Grain:        report.Grain,
+			ExpiryIn:     int64(maxInt(0, int(report.ExpiryTick-store.TickCount))),
+		})
+	}
+	sort.Slice(scryReports, func(i, j int) bool { return scryReports[i].ID > scryReports[j].ID })
+	if len(scryReports) > 6 {
+		scryReports = scryReports[:6]
+	}
+
 	loans := make([]LoanView, 0, len(store.Loans))
 	for _, ln := range store.Loans {
 		if ln.BorrowerPlayerID != p.ID && ln.LenderPlayerID != p.ID {
@@ -4138,6 +4264,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Policies:                store.Policies,
 		Rumors:                  rumors,
 		Evidence:                evidence,
+		ScryReports:             scryReports,
 		Loans:                   loans,
 		Obligations:             obligations,
 		Permits:                 permits,
