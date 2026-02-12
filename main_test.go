@@ -1152,6 +1152,83 @@ func TestEmbargoBlocksSmugglingAcceptUnlessHarborMaster(t *testing.T) {
 	}
 }
 
+func TestHighCurateInquestPurgesForgeryAndRumors(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	curate := &Player{ID: "p1", Name: "Sister Vale (Guest)", Gold: 20, Rep: 5, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 0, Heat: 2, LastSeen: now}
+	forger := &Player{ID: "p3", Name: "Corin Reed (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[curate.ID] = curate
+	s.Players[target.ID] = target
+	s.Players[forger.ID] = forger
+	s.Seats["high_curate"].HolderPlayerID = curate.ID
+	s.Seats["high_curate"].HolderName = curate.Name
+
+	addEvidenceLocked(s, forger, target, "fraud", 4, 5, true)
+	addEvidenceLocked(s, forger, target, "corruption", 4, 5, false)
+	addRumorLocked(s, &Rumor{
+		Claim:          "Bran hid tax ledgers.",
+		Topic:          "corruption",
+		TargetPlayerID: target.ID,
+		TargetName:     target.Name,
+		SourcePlayerID: forger.ID,
+		SourceName:     forger.Name,
+		Credibility:    5,
+		Spread:         4,
+		Decay:          4,
+	}, now)
+
+	handleActionInputLocked(s, curate, now, ActionInput{Action: "conduct_inquest", TargetID: target.ID})
+
+	foundForged := false
+	foundLegit := false
+	for _, ev := range s.Evidence {
+		if ev.Forged {
+			foundForged = true
+		} else if ev.TargetPlayerID == target.ID {
+			foundLegit = true
+		}
+	}
+	if foundForged {
+		t.Fatalf("expected forged evidence to be removed by inquest")
+	}
+	if !foundLegit {
+		t.Fatalf("expected legitimate evidence to remain after inquest")
+	}
+
+	var rumor *Rumor
+	for _, r := range s.Rumors {
+		if r.TargetPlayerID == target.ID {
+			rumor = r
+			break
+		}
+	}
+	if rumor == nil {
+		t.Fatalf("expected rumor to remain with reduced impact")
+	}
+	if rumor.Credibility != 3 {
+		t.Fatalf("expected credibility to drop to 3, got %d", rumor.Credibility)
+	}
+	if rumor.Spread != 1 {
+		t.Fatalf("expected spread to drop to 1, got %d", rumor.Spread)
+	}
+	if rumor.Decay != 2 {
+		t.Fatalf("expected decay to drop to 2, got %d", rumor.Decay)
+	}
+	if target.Rep != 1 {
+		t.Fatalf("expected target rep to rise to 1, got %d", target.Rep)
+	}
+	if target.Heat != 1 {
+		t.Fatalf("expected target heat to drop to 1, got %d", target.Heat)
+	}
+	if curate.Rep != 6 {
+		t.Fatalf("expected curate rep to rise to 6, got %d", curate.Rep)
+	}
+	if s.DailyHighImpactN[curate.ID] != 1 {
+		t.Fatalf("expected high-impact budget to be consumed")
+	}
+}
+
 func TestScenarioInformationAttackInstitutionResponseEconomicConsequence(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

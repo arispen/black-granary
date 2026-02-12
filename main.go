@@ -72,6 +72,9 @@ const (
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
 	locationRuins               = "ruins"
+	inquestRumorCredibilityDrop = 2
+	inquestRumorSpreadDrop      = 3
+	inquestRumorDecayDrop       = 2
 )
 
 type WorldState struct {
@@ -488,6 +491,7 @@ type SeatView struct {
 	CanTogglePermit     bool
 	CanToggleEmbargo    bool
 	CanIssuePermit      bool
+	CanConductInquest   bool
 }
 
 type RumorView struct {
@@ -3180,6 +3184,52 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			p.Rep = clampInt(p.Rep-3, -100, 100)
 			setToastLocked(store, p.ID, "Your accusation backfires.")
 		}
+	case "conduct_inquest":
+		if !playerHoldsSeatLocked(store, p.ID, "high_curate") {
+			setToastLocked(store, p.ID, "Only the High Curate can conduct inquests.")
+			return
+		}
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid inquest target.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		removedEvidence := 0
+		for id, ev := range store.Evidence {
+			if ev.TargetPlayerID == target.ID && ev.Forged {
+				delete(store.Evidence, id)
+				removedEvidence++
+			}
+		}
+		rumorAdjusted := 0
+		for _, r := range store.Rumors {
+			if r.TargetPlayerID != target.ID {
+				continue
+			}
+			r.Credibility = maxInt(1, r.Credibility-inquestRumorCredibilityDrop)
+			r.Spread = maxInt(0, r.Spread-inquestRumorSpreadDrop)
+			r.Decay = maxInt(0, r.Decay-inquestRumorDecayDrop)
+			rumorAdjusted++
+		}
+		addEventLocked(store, Event{
+			Type:     "Doctrine",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] conducts an inquest over [%s].", p.Name, target.Name),
+			At:       now,
+		})
+		if removedEvidence == 0 && rumorAdjusted == 0 {
+			setToastLocked(store, p.ID, "Inquest finds no false testimony to purge.")
+			return
+		}
+		target.Rep = clampInt(target.Rep+1, -100, 100)
+		target.Heat = maxInt(0, target.Heat-1)
+		p.Rep = clampInt(p.Rep+1, -100, 100)
+		setToastLocked(store, p.ID, fmt.Sprintf("Inquest purges %d forged dossiers and dampens %d rumor lines.", removedEvidence, rumorAdjusted))
+		setToastLocked(store, target.ID, "An inquest clears your name with the Curate.")
 	case "campaign_seat":
 		seat := store.Seats[contractID]
 		if seat == nil || seat.ElectionWindowTicks <= 0 {
@@ -4008,6 +4058,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			instName = inst.Name
 		}
 		canIssuePermit := seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID && store.Policies.PermitRequiredHighRisk && hasOtherPlayers && highImpactRemaining > 0
+		canConductInquest := seat.ID == "high_curate" && seat.HolderPlayerID == p.ID && hasOtherPlayers && highImpactRemaining > 0
 		seats = append(seats, SeatView{
 			ID:                  seat.ID,
 			Name:                seat.Name,
@@ -4023,6 +4074,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CanTogglePermit:     seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
 			CanToggleEmbargo:    seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
 			CanIssuePermit:      canIssuePermit,
+			CanConductInquest:   canConductInquest,
 		})
 	}
 

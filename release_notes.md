@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.17.0
+- Added High Curate inquest action to purge forged evidence and dampen rumor waves on a target.
+- Institutions/Offices now surface the Conduct Inquest control with high-impact budgeting.
+- Inquests boost the target's standing while logging doctrine events.
+
 ## 0.16.0
 - Added forged evidence intel action with costed, short-lived dossiers and failure penalties.
 - Intel panel now labels evidence origin (forged vs investigated) and shows expiry ticks.

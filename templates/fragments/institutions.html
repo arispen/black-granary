@@ -52,6 +52,15 @@
             <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Issue Permit ({{ $.HighImpactRemaining }}/{{ $.HighImpactCap }})</button>
           </form>
         {{ end }}
+        {{ if .CanConductInquest }}
+          <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+            <input type="hidden" name="action" value="conduct_inquest">
+            <select name="target_id" aria-label="Inquest target" {{ if $.Traveling }}disabled{{ end }}>
+              {{ range $.PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+            </select>
+            <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Conduct Inquest ({{ $.HighImpactRemaining }}/{{ $.HighImpactCap }})</button>
+          </form>
+        {{ end }}
       </div>
     </div>
   {{ end }}
