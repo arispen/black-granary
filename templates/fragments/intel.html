@@ -1,56 +1,62 @@
 {{ define "intel_inner" }}
 <h3>Intel</h3>
 <div class="muted" style="margin-bottom:6px;">High impact actions remaining: {{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
+{{ if .Traveling }}
+  <div class="muted" style="margin-bottom:6px;">Travel in progress: intel actions are paused.</div>
+{{ end }}
+{{ if gt .World.WardNetworkTicks 0 }}
+  <div class="muted" style="margin-bottom:6px;">Ward network active: scrying dampened for {{ .World.WardNetworkTicks }} ticks.</div>
+{{ end }}
 {{ if .HasOtherPlayers }}
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:0;">
     <input type="hidden" name="action" value="seed_rumor">
-    <select name="target_id" aria-label="Rumor target">
+    <select name="target_id" aria-label="Rumor target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <input id="claim-input" name="claim" placeholder="Claim" maxlength="120" style="min-width:180px;">
-    <button type="submit">Seed Rumor</button>
+    <input id="claim-input" name="claim" placeholder="Claim" maxlength="120" style="min-width:180px;" {{ if $.Traveling }}disabled{{ end }}>
+    <button type="submit" {{ if $.Traveling }}disabled{{ end }}>Seed Rumor</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="investigate_target">
-    <select name="target_id" aria-label="Investigate target">
+    <select name="target_id" aria-label="Investigate target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit" {{ if .InvestigateDisabled }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
+    <button class="secondary" type="submit" {{ if or .InvestigateDisabled $.Traveling }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="publish_evidence">
-    <select name="target_id" aria-label="Publish target">
+    <select name="target_id" aria-label="Publish target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Publish Evidence</button>
+    <button class="secondary" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Publish Evidence</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="scry_target">
-    <select name="target_id" aria-label="Scry target">
+    <select name="target_id" aria-label="Scry target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Scry Target</button>
+    <button class="secondary" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Scry Target</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="counter_narrative">
-    <select name="target_id" aria-label="Counter target">
+    <select name="target_id" aria-label="Counter target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="secondary" type="submit">Counter Narrative</button>
+    <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Counter Narrative</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="threaten_exposure">
-    <select name="target_id" aria-label="Threaten target">
+    <select name="target_id" aria-label="Threaten target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="warn" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Threaten Exposure</button>
+    <button class="warn" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Threaten Exposure</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="accuse_heresy">
-    <select name="target_id" aria-label="Accuse target">
+    <select name="target_id" aria-label="Accuse target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
     </select>
-    <button class="warn" type="submit" {{ if eq .HighImpactRemaining 0 }}disabled{{ end }}>Accuse Heresy</button>
+    <button class="warn" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Accuse Heresy</button>
   </form>
 {{ else }}
   <div class="muted" style="margin-bottom:8px;">No other players online for intel actions.</div>

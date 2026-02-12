@@ -78,6 +78,7 @@ type WorldState struct {
 	UnrestValue                  int
 	UnrestTier                   string
 	RestrictedMarketsTicks       int
+	WardNetworkTicks             int
 	CriticalTickStreak           int
 	CriticalStreakPenaltyApplied bool
 	Situation                    string
@@ -278,16 +279,17 @@ type Project struct {
 }
 
 type ProjectDefinition struct {
-	Type          string
-	Name          string
-	Description   string
-	CostGold      int
-	CostGrain     int
-	DurationTicks int
-	GrainDelta    int
-	UnrestDelta   int
-	RepDelta      int
-	HeatDelta     int
+	Type             string
+	Name             string
+	Description      string
+	CostGold         int
+	CostGrain        int
+	DurationTicks    int
+	GrainDelta       int
+	UnrestDelta      int
+	RepDelta         int
+	HeatDelta        int
+	WardNetworkTicks int
 }
 
 type Crisis struct {
@@ -1079,6 +1081,7 @@ func newStore() *Store {
 			UnrestValue:            5,
 			UnrestTier:             "Calm",
 			RestrictedMarketsTicks: 0,
+			WardNetworkTicks:       0,
 			Situation:              deriveSituation("Stable", "Calm"),
 		},
 		Players:           map[string]*Player{},
@@ -1129,6 +1132,7 @@ func resetStoreLocked(s *Store) {
 		UnrestValue:            5,
 		UnrestTier:             "Calm",
 		RestrictedMarketsTicks: 0,
+		WardNetworkTicks:       0,
 		Situation:              deriveSituation("Stable", "Calm"),
 	}
 	s.Players = map[string]*Player{}
@@ -1430,6 +1434,12 @@ func processInstitutionTickLocked(store *Store, now time.Time) {
 			addEventLocked(store, Event{Type: "Policy", Severity: 1, Text: "Smuggling embargo expires.", At: now})
 		}
 	}
+	if store.World.WardNetworkTicks > 0 {
+		store.World.WardNetworkTicks--
+		if store.World.WardNetworkTicks == 0 {
+			addEventLocked(store, Event{Type: "Doctrine", Severity: 1, Text: "Ward lanterns gutter; the veil thins.", At: now})
+		}
+	}
 	for playerID, permit := range store.Permits {
 		if permit == nil {
 			delete(store.Permits, playerID)
@@ -1524,8 +1534,14 @@ func hasActivePermitLocked(store *Store, playerID string) bool {
 }
 
 func processIntelTickLocked(store *Store, now time.Time) {
+	warded := store.World.WardNetworkTicks > 0
 	for id, r := range store.Rumors {
-		r.Spread += maxInt(1, r.Credibility/3)
+		spreadGain := maxInt(1, r.Credibility/3)
+		if warded {
+			spreadGain = maxInt(0, spreadGain-1)
+			r.Decay--
+		}
+		r.Spread += spreadGain
 		r.Decay--
 		if r.Spread >= 6 {
 			if target := store.Players[r.TargetPlayerID]; target != nil {
@@ -1617,6 +1633,11 @@ func processProjectTickLocked(store *Store, now time.Time) {
 				}
 				if def.HeatDelta != 0 {
 					owner.Heat = clampInt(owner.Heat+def.HeatDelta, 0, 20)
+				}
+			}
+			if def.WardNetworkTicks > 0 {
+				if store.World.WardNetworkTicks < def.WardNetworkTicks {
+					store.World.WardNetworkTicks = def.WardNetworkTicks
 				}
 			}
 			addEventLocked(store, Event{
@@ -1877,14 +1898,14 @@ func addRelicLocked(store *Store, owner *Player, def RelicDefinition, now time.T
 	store.NextRelicID++
 	id := store.NextRelicID
 	relic := &Relic{
-		ID:             id,
-		Name:           def.Name,
-		Effect:         def.Effect,
-		Power:          def.Power,
-		OwnerPlayerID:  owner.ID,
-		OwnerName:      owner.Name,
-		Status:         relicStatusUnappraised,
-		FoundAtTick:    store.TickCount,
+		ID:              id,
+		Name:            def.Name,
+		Effect:          def.Effect,
+		Power:           def.Power,
+		OwnerPlayerID:   owner.ID,
+		OwnerName:       owner.Name,
+		Status:          relicStatusUnappraised,
+		FoundAtTick:     store.TickCount,
 		AppraisedAtTick: 0,
 	}
 	store.Relics[id] = relic
@@ -2419,6 +2440,9 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			return
 		}
 		successChance := 45 + maxInt(0, p.Rep)/4
+		if store.World.WardNetworkTicks > 0 {
+			successChance = maxInt(10, successChance-12)
+		}
 		if rollPercent(store.rng, minInt(successChance, 85)) {
 			addScryReportLocked(store, p, target)
 			addEventLocked(store, Event{
@@ -4594,6 +4618,15 @@ func projectDefinitions() []ProjectDefinition {
 			UnrestDelta:   -5,
 			RepDelta:      2,
 		},
+		{
+			Type:             "ward_lanterns",
+			Name:             "Ward Lanterns",
+			Description:      "Raise luminous wards to dampen rumors and scrying.",
+			CostGold:         7,
+			CostGrain:        1,
+			DurationTicks:    2,
+			WardNetworkTicks: 3,
+		},
 	}
 }
 
@@ -4619,6 +4652,9 @@ func projectEffectNote(def ProjectDefinition) string {
 	}
 	if def.HeatDelta != 0 {
 		parts = append(parts, fmt.Sprintf("%+d heat", def.HeatDelta))
+	}
+	if def.WardNetworkTicks > 0 {
+		parts = append(parts, fmt.Sprintf("warded veil %dt", def.WardNetworkTicks))
 	}
 	if len(parts) == 0 {
 		return "no clear effect"

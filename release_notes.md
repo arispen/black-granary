@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.14.0
+- Added Ward Lanterns public works project that activates a temporary ward network.
+- Ward network dampens rumor spread and reduces scrying success chances while active.
+- Intel, Institutions, and Ledger panels now surface travel lockouts and disable actions during travel.
+
 ## 0.13.0
 - Added scrying intel action that captures short-lived dossiers on other players.
 - Intel panel now lists scrying reports with location, travel, and resource snapshots.

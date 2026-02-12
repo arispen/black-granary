@@ -564,6 +564,65 @@ func TestProjectCompletionAppliesEffects(t *testing.T) {
 	}
 }
 
+func TestWardLanternsProjectStartsWardNetwork(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 0, Rep: 0, Heat: 0, Grain: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	def, ok := projectDefinitionByType("ward_lanterns")
+	if !ok {
+		t.Fatalf("expected ward lanterns definition")
+	}
+
+	s.Projects["p-1"] = &Project{
+		ID:            "p-1",
+		Type:          def.Type,
+		Name:          def.Name,
+		OwnerPlayerID: p.ID,
+		OwnerName:     p.Name,
+		TicksLeft:     1,
+		TotalTicks:    def.DurationTicks,
+	}
+
+	processProjectTickLocked(s, now)
+
+	if s.World.WardNetworkTicks != def.WardNetworkTicks {
+		t.Fatalf("ward network ticks should be set, got %d want %d", s.World.WardNetworkTicks, def.WardNetworkTicks)
+	}
+}
+
+func TestWardedNetworkDampensRumors(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	target := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 0, Rep: 0, Heat: 0, LastSeen: now}
+	s.Players[target.ID] = target
+
+	s.World.WardNetworkTicks = 2
+	s.Rumors[1] = &Rumor{
+		ID:             1,
+		Claim:          "Whispers swirl",
+		Topic:          "corruption",
+		TargetPlayerID: target.ID,
+		TargetName:     target.Name,
+		SourcePlayerID: "p2",
+		SourceName:     "Bran Vale (Guest)",
+		Credibility:    6,
+		Spread:         1,
+		Decay:          3,
+	}
+
+	processIntelTickLocked(s, now)
+
+	r := s.Rumors[1]
+	if r.Spread != 2 {
+		t.Fatalf("warded rumor spread should slow, got spread=%d", r.Spread)
+	}
+	if r.Decay != 1 {
+		t.Fatalf("warded rumor decay should accelerate, got decay=%d", r.Decay)
+	}
+}
+
 func TestBountyDeliveryRequiresEvidence(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
