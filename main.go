@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"html/template"
@@ -11,6 +14,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,6 +25,13 @@ import (
 
 const (
 	cookieName                  = "pid"
+	adminAuthCookieName         = "admin_auth"
+	adminCSRFCookieName         = "admin_csrf"
+	adminAuthHeaderName         = "X-Admin-Token"
+	adminCSRFHeaderName         = "X-CSRF-Token"
+	adminTokenEnvName           = "ADMIN_TOKEN"
+	adminLoopbackEnvName        = "ALLOW_LOOPBACK_ADMIN"
+	adminCookieSecureEnvName    = "ADMIN_COOKIE_SECURE"
 	maxEvents                   = 300
 	maxChat                     = 200
 	maxDiplomacyMessages        = 200
@@ -33,7 +44,6 @@ const (
 	deliverCooldown             = 10 * time.Second
 	chatCooldown                = 2 * time.Second
 	messageCooldown             = 5 * time.Second
-	adminToken                  = "DEV"
 	serverAddr                  = ":8080"
 	templateRoot                = "templates"
 	initialPlayerGold           = 20
@@ -116,6 +126,8 @@ type Player struct {
 	TravelTicksLeft         int
 	TravelTotalTicks        int
 	LastSeen                time.Time
+	SoftDeletedAt           time.Time
+	HardDeletedAt           time.Time
 }
 
 type Contract struct {
@@ -255,6 +267,7 @@ type Loan struct {
 	Remaining        int
 	DueTick          int64
 	Status           string
+	TerminalAt       time.Time
 }
 
 type Obligation struct {
@@ -267,6 +280,7 @@ type Obligation struct {
 	Severity         int
 	DueTick          int64
 	Status           string
+	TerminalAt       time.Time
 }
 
 type Permit struct {
@@ -367,7 +381,8 @@ type LocationDef struct {
 }
 
 type Store struct {
-	mu sync.Mutex
+	mu   sync.Mutex
+	repo *SQLRepository
 
 	World        WorldState
 	Players      map[string]*Player
@@ -420,6 +435,7 @@ type Store struct {
 	DailyActionDate   map[string]string
 	DailyHighImpactN  map[string]int
 	ToastByPlayer     map[string]string
+	LastCleanupDate   string
 
 	rng *mathrand.Rand
 }
@@ -768,8 +784,12 @@ var nameLast = []string{"Stone", "Vale", "Thorne", "Mire", "Brindle", "Hollow", 
 
 func main() {
 	tmpl := parseTemplates()
-	store := newStore()
+	store, err := newConfiguredStore()
+	if err != nil {
+		log.Fatal(err)
+	}
 	startTickScheduler(store)
+	startCleanupScheduler(store)
 	mux := newMux(store, tmpl)
 
 	log.Printf("listening on http://localhost%s", serverAddr)
@@ -788,6 +808,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		// Concurrency model: lock for full handler to keep all reads/writes consistent and race-free.
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 
 		p := ensurePlayerLocked(store, w, r)
 		now := time.Now().UTC()
@@ -813,6 +834,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderActionLikeResponse(w, tmpl, buildPageDataLocked(store, p.ID, false), false)
@@ -825,6 +847,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "events_inner", buildPageDataLocked(store, p.ID, false))
@@ -837,6 +860,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "chat_inner", buildPageDataLocked(store, p.ID, false))
@@ -849,6 +873,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "diplomacy_inner", buildPageDataLocked(store, p.ID, false))
@@ -861,6 +886,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "players_inner", buildPageDataLocked(store, p.ID, false))
@@ -873,6 +899,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "institutions_inner", buildPageDataLocked(store, p.ID, false))
@@ -885,6 +912,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "intel_inner", buildPageDataLocked(store, p.ID, false))
@@ -897,6 +925,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "ledger_inner", buildPageDataLocked(store, p.ID, false))
@@ -909,6 +938,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 		p := ensurePlayerLocked(store, w, r)
 		p.LastSeen = time.Now().UTC()
 		renderPage(w, tmpl, "market_inner", buildPageDataLocked(store, p.ID, false))
@@ -926,6 +956,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 
 		p := ensurePlayerLocked(store, w, r)
 		now := time.Now().UTC()
@@ -977,6 +1008,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 
 		p := ensurePlayerLocked(store, w, r)
 		now := time.Now().UTC()
@@ -1018,6 +1050,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
+		defer store.persistLocked()
 
 		p := ensurePlayerLocked(store, w, r)
 		now := time.Now().UTC()
@@ -1100,19 +1133,20 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		csrfToken, err := issueAdminSessionCookies(w, r)
+		if err != nil {
+			http.Error(w, "failed to initialize admin session", http.StatusInternalServerError)
+			return
+		}
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tokenQ := ""
-		if r.URL.Query().Get("token") == adminToken {
-			tokenQ = "?token=" + adminToken
-		}
 		_, _ = fmt.Fprintf(w, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Admin</title><style>body{font-family:ui-sans-serif,system-ui;background:#0b0f14;color:#e5ecf4;padding:24px}pre{background:#121923;border:1px solid #2a3442;padding:12px;border-radius:8px;overflow:auto}button{background:#1f6feb;color:#fff;border:0;padding:8px 12px;border-radius:6px;margin-right:8px;cursor:pointer}</style></head><body>")
-		_, _ = fmt.Fprintf(w, "<h1>Admin</h1><p>RESET ON RESTART (test realm)</p>")
-		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/tick%s\"><button type=\"submit\">Force Tick</button></form>", tokenQ)
-		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/reset%s\"><button type=\"submit\">Reset World</button></form>", tokenQ)
+		_, _ = fmt.Fprintf(w, "<h1>Admin</h1><p>Persistent realm state enabled via DB_DIALECT.</p>")
+		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/tick\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><button type=\"submit\">Force Tick</button></form>", template.HTMLEscapeString(csrfToken))
+		_, _ = fmt.Fprintf(w, "<form style=\"display:inline\" method=\"post\" action=\"/admin/reset\"><input type=\"hidden\" name=\"csrf_token\" value=\"%s\"><button type=\"submit\">Reset World</button></form>", template.HTMLEscapeString(csrfToken))
 
 		online := onlinePlayersLocked(store, time.Now().UTC())
 		_, _ = fmt.Fprintf(w, "<h2>World</h2><pre>%+v</pre>", store.World)
@@ -1139,10 +1173,15 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if !hasValidAdminHeaderToken(r) && !validateAdminCSRF(r) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
 		store.mu.Lock()
+		defer store.mu.Unlock()
+		defer store.persistLocked()
 		runWorldTickLocked(store, time.Now().UTC())
-		store.mu.Unlock()
-		http.Redirect(w, r, "/admin"+adminTokenSuffix(r), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/admin/reset", func(w http.ResponseWriter, r *http.Request) {
@@ -1154,10 +1193,15 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if !hasValidAdminHeaderToken(r) && !validateAdminCSRF(r) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
 		store.mu.Lock()
+		defer store.mu.Unlock()
+		defer store.persistLocked()
 		resetStoreLocked(store)
-		store.mu.Unlock()
-		http.Redirect(w, r, "/admin"+adminTokenSuffix(r), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
 	return mux
 }
@@ -1214,6 +1258,7 @@ func newStore() *Store {
 		DailyActionDate:   map[string]string{},
 		DailyHighImpactN:  map[string]int{},
 		ToastByPlayer:     map[string]string{},
+		LastCleanupDate:   "",
 		rng:               mathrand.New(mathrand.NewSource(now.UnixNano())),
 	}
 	initializeInstitutionsLocked(s)
@@ -1275,6 +1320,7 @@ func resetStoreLocked(s *Store) {
 	s.DailyActionDate = map[string]string{}
 	s.DailyHighImpactN = map[string]int{}
 	s.ToastByPlayer = map[string]string{}
+	s.LastCleanupDate = ""
 	initializeInstitutionsLocked(s)
 	addEventLocked(s, Event{Type: "Reset", Severity: 1, Text: "The test realm is reset; old deals and names are gone.", At: now})
 }
@@ -1291,6 +1337,7 @@ func startTickScheduler(store *Store) {
 			if online && now.UTC().Sub(store.LastTickAt) >= store.TickEvery {
 				runWorldTickLocked(store, now.UTC())
 				store.LastTickAt = now.UTC()
+				store.persistLocked()
 			}
 			store.mu.Unlock()
 		}
@@ -1726,6 +1773,7 @@ func processFinanceTickLocked(store *Store, now time.Time) {
 			continue
 		}
 		ob.Status = "Overdue"
+		ob.TerminalAt = now
 		overdueThisTick++
 		debtor := store.Players[ob.DebtorPlayerID]
 		creditor := store.Players[ob.CreditorPlayerID]
@@ -2213,6 +2261,7 @@ func addObligationLocked(store *Store, creditor, debtor *Player, reason string, 
 		Severity:         clampInt(severity, 1, 5),
 		DueTick:          store.TickCount + obligationDueTicks,
 		Status:           "Open",
+		TerminalAt:       time.Time{},
 	}
 }
 
@@ -2264,6 +2313,7 @@ func processLoanDefaultLocked(store *Store, loan *Loan, now time.Time) {
 		return
 	}
 	loan.Status = "Defaulted"
+	loan.TerminalAt = now
 	borrower := store.Players[loan.BorrowerPlayerID]
 	lender := store.Players[loan.LenderPlayerID]
 	if borrower != nil {
@@ -2784,6 +2834,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			Remaining:        principal,
 			DueTick:          store.TickCount + loanDueTicks,
 			Status:           "Offered",
+			TerminalAt:       time.Time{},
 		}
 		addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] offers a loan to [%s].", p.Name, target.Name), At: now})
 		setToastLocked(store, p.ID, "Loan offer issued.")
@@ -2797,11 +2848,13 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		if lender == nil || lender.Gold < loan.Principal {
 			setToastLocked(store, p.ID, "Lender cannot fund this loan.")
 			loan.Status = "Cancelled"
+			loan.TerminalAt = now
 			return
 		}
 		lender.Gold -= loan.Principal
 		p.Gold += loan.Principal
 		loan.Status = "Active"
+		loan.TerminalAt = time.Time{}
 		addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] accepts credit from [%s].", p.Name, lender.Name), At: now})
 		setToastLocked(store, p.ID, "Loan accepted.")
 	case "repay":
@@ -2827,6 +2880,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		if loan.Remaining == 0 {
 			loan.Status = "Repaid"
+			loan.TerminalAt = now
 			p.Rep = clampInt(p.Rep+2, -100, 100)
 			addEventLocked(store, Event{Type: "Finance", Severity: 2, Text: fmt.Sprintf("[%s] repays debt to [%s].", p.Name, loan.LenderName), At: now})
 		}
@@ -2862,6 +2916,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		p.Rep = clampInt(p.Rep+2, -100, 100)
 		p.Heat = maxInt(0, p.Heat-1)
 		ob.Status = "Settled"
+		ob.TerminalAt = now
 		addEventLocked(store, Event{
 			Type:     "Finance",
 			Severity: 2,
@@ -2880,6 +2935,7 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			return
 		}
 		ob.Status = "Forgiven"
+		ob.TerminalAt = now
 		p.Rep = clampInt(p.Rep+2, -100, 100)
 		if debtor := store.Players[ob.DebtorPlayerID]; debtor != nil {
 			debtor.Rep = clampInt(debtor.Rep+1, -100, 100)
@@ -3667,6 +3723,8 @@ func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *P
 		setToastLocked(store, pid, fmt.Sprintf("You arrive as %s.", p.Name))
 		addEventLocked(store, Event{Type: "Join", Severity: 1, Text: fmt.Sprintf("[%s] enters the city under a borrowed name.", p.Name), At: time.Now().UTC()})
 	}
+	p.SoftDeletedAt = time.Time{}
+	p.HardDeletedAt = time.Time{}
 	if p.LocationID == "" {
 		p.LocationID = locationCapital
 	}
@@ -4903,8 +4961,11 @@ func renderChatResponse(w http.ResponseWriter, tmpl *template.Template, data Pag
 }
 
 func isAdmin(r *http.Request) bool {
-	if r.URL.Query().Get("token") == adminToken {
+	if hasValidAdminHeaderToken(r) || hasValidAdminCookieToken(r) {
 		return true
+	}
+	if !envBool(adminLoopbackEnvName, false) {
+		return false
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -4914,11 +4975,101 @@ func isAdmin(r *http.Request) bool {
 	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
-func adminTokenSuffix(r *http.Request) string {
-	if r.URL.Query().Get("token") == adminToken {
-		return "?token=" + adminToken
+func hasValidAdminHeaderToken(r *http.Request) bool {
+	token := strings.TrimSpace(os.Getenv(adminTokenEnvName))
+	if token == "" {
+		return false
 	}
-	return ""
+	headerToken := strings.TrimSpace(r.Header.Get(adminAuthHeaderName))
+	return secureStringEqual(headerToken, token)
+}
+
+func hasValidAdminCookieToken(r *http.Request) bool {
+	token := strings.TrimSpace(os.Getenv(adminTokenEnvName))
+	if token == "" {
+		return false
+	}
+	c, err := r.Cookie(adminAuthCookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	return secureStringEqual(c.Value, signAdminCookieValue(token))
+}
+
+func signAdminCookieValue(token string) string {
+	h := hmac.New(sha256.New, []byte(token))
+	_, _ = io.WriteString(h, "black-granary-admin-auth-v1")
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+func secureStringEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func envBool(name string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func issueAdminSessionCookies(w http.ResponseWriter, r *http.Request) (string, error) {
+	token := strings.TrimSpace(os.Getenv(adminTokenEnvName))
+	if token == "" && !envBool(adminLoopbackEnvName, false) {
+		return "", fmt.Errorf("%s is required when %s is disabled", adminTokenEnvName, adminLoopbackEnvName)
+	}
+	secure := envBool(adminCookieSecureEnvName, true)
+	if hasValidAdminHeaderToken(r) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     adminAuthCookieName,
+			Value:    signAdminCookieValue(token),
+			Path:     "/admin",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			Secure:   secure,
+		})
+	}
+	csrfToken, err := generateIDFromRandomBytes(32)
+	if err != nil {
+		return "", err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCSRFCookieName,
+		Value:    csrfToken,
+		Path:     "/admin",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
+	})
+	return csrfToken, nil
+}
+
+func generateIDFromRandomBytes(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func validateAdminCSRF(r *http.Request) bool {
+	c, err := r.Cookie(adminCSRFCookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	provided := strings.TrimSpace(r.Header.Get(adminCSRFHeaderName))
+	if provided == "" {
+		provided = strings.TrimSpace(r.FormValue("csrf_token"))
+	}
+	return secureStringEqual(provided, c.Value)
 }
 
 func grainTierFromSupply(v int) string {

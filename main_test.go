@@ -1155,17 +1155,26 @@ func TestTickTimeProgressionAndInactivityAutoAbandon(t *testing.T) {
 	}
 }
 
-func TestIsAdminTokenAndLoopback(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.test/admin?token=DEV", nil)
+func TestIsAdminTokenHeaderAndLoopbackToggle(t *testing.T) {
+	t.Setenv(adminTokenEnvName, "test-secret")
+	t.Setenv(adminLoopbackEnvName, "false")
+
+	req := httptest.NewRequest("GET", "http://example.test/admin", nil)
 	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set(adminAuthHeaderName, "test-secret")
 	if !isAdmin(req) {
-		t.Fatalf("token auth should allow admin")
+		t.Fatalf("header token auth should allow admin")
 	}
 
 	req2 := httptest.NewRequest("GET", "http://example.test/admin", nil)
 	req2.RemoteAddr = "127.0.0.1:45678"
+	if isAdmin(req2) {
+		t.Fatalf("loopback should not allow admin by default")
+	}
+
+	t.Setenv(adminLoopbackEnvName, "true")
 	if !isAdmin(req2) {
-		t.Fatalf("loopback should allow admin")
+		t.Fatalf("loopback should allow admin when explicitly enabled")
 	}
 }
 

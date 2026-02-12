@@ -320,13 +320,22 @@ func TestDiplomacyMessageDeliveryPrivacy(t *testing.T) {
 }
 
 func TestAdminProtectionTickAndReset(t *testing.T) {
+	t.Setenv(adminTokenEnvName, "test-secret")
+	t.Setenv(adminLoopbackEnvName, "false")
+	t.Setenv(adminCookieSecureEnvName, "false")
+
 	s := newTestStore()
 	tmpl := parseTemplates()
 	mux := newMux(s, tmpl)
 
 	forbidden := doReq(t, mux, http.MethodGet, "/admin", nil, "", "203.0.113.10:9999")
 	if forbidden.Code != http.StatusForbidden {
-		t.Fatalf("expected /admin forbidden without loopback or token, got %d", forbidden.Code)
+		t.Fatalf("expected /admin forbidden without header/cookie auth, got %d", forbidden.Code)
+	}
+
+	queryToken := doReq(t, mux, http.MethodGet, "/admin?token=test-secret", nil, "", "203.0.113.10:9999")
+	if queryToken.Code != http.StatusForbidden {
+		t.Fatalf("query token should not authorize admin, got %d", queryToken.Code)
 	}
 
 	s.mu.Lock()
@@ -335,14 +344,40 @@ func TestAdminProtectionTickAndReset(t *testing.T) {
 	prevTick := s.TickCount
 	s.mu.Unlock()
 
-	okAdmin := doReq(t, mux, http.MethodGet, "/admin?token=DEV", nil, "", "203.0.113.10:9999")
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.RemoteAddr = "203.0.113.10:9999"
+	req.Header.Set(adminAuthHeaderName, "test-secret")
+	okAdmin := httptest.NewRecorder()
+	mux.ServeHTTP(okAdmin, req)
 	if okAdmin.Code != http.StatusOK {
-		t.Fatalf("expected /admin with token to pass, got %d", okAdmin.Code)
+		t.Fatalf("expected /admin with header token to pass, got %d", okAdmin.Code)
+	}
+	adminCookie := cookieFromResponse(okAdmin, adminAuthCookieName)
+	csrfCookie := cookieFromResponse(okAdmin, adminCSRFCookieName)
+	if adminCookie == "" || csrfCookie == "" {
+		t.Fatalf("expected admin and csrf cookies to be set")
 	}
 
-	tickResp := doReq(t, mux, http.MethodPost, "/admin/tick?token=DEV", nil, "", "203.0.113.10:9999")
+	noCSRFTick := httptest.NewRequest(http.MethodPost, "/admin/tick", strings.NewReader(""))
+	noCSRFTick.RemoteAddr = "203.0.113.10:9999"
+	noCSRFTick.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	noCSRFTick.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
+	noCSRFTick.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	noCSRFTickResp := httptest.NewRecorder()
+	mux.ServeHTTP(noCSRFTickResp, noCSRFTick)
+	if noCSRFTickResp.Code != http.StatusForbidden {
+		t.Fatalf("expected /admin/tick forbidden without csrf, got %d", noCSRFTickResp.Code)
+	}
+
+	tickReq := httptest.NewRequest(http.MethodPost, "/admin/tick", strings.NewReader(url.Values{"csrf_token": {csrfCookie}}.Encode()))
+	tickReq.RemoteAddr = "203.0.113.10:9999"
+	tickReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	tickReq.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
+	tickReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tickResp := httptest.NewRecorder()
+	mux.ServeHTTP(tickResp, tickReq)
 	if tickResp.Code != http.StatusSeeOther {
-		t.Fatalf("expected /admin/tick redirect, got %d", tickResp.Code)
+		t.Fatalf("expected /admin/tick redirect with csrf, got %d", tickResp.Code)
 	}
 	s.mu.Lock()
 	if s.TickCount != prevTick+1 {
@@ -351,9 +386,15 @@ func TestAdminProtectionTickAndReset(t *testing.T) {
 	}
 	s.mu.Unlock()
 
-	resetResp := doReq(t, mux, http.MethodPost, "/admin/reset?token=DEV", nil, "", "203.0.113.10:9999")
+	resetReq := httptest.NewRequest(http.MethodPost, "/admin/reset", strings.NewReader(url.Values{"csrf_token": {csrfCookie}}.Encode()))
+	resetReq.RemoteAddr = "203.0.113.10:9999"
+	resetReq.AddCookie(&http.Cookie{Name: adminAuthCookieName, Value: adminCookie})
+	resetReq.AddCookie(&http.Cookie{Name: adminCSRFCookieName, Value: csrfCookie})
+	resetReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resetResp := httptest.NewRecorder()
+	mux.ServeHTTP(resetResp, resetReq)
 	if resetResp.Code != http.StatusSeeOther {
-		t.Fatalf("expected /admin/reset redirect, got %d", resetResp.Code)
+		t.Fatalf("expected /admin/reset redirect with csrf, got %d", resetResp.Code)
 	}
 	s.mu.Lock()
 	if len(s.Players) != 0 || len(s.Contracts) != 0 || s.TickCount != 0 {
