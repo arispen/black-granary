@@ -61,6 +61,8 @@ const (
 	fieldworkCooldownTicks      = 2
 	fieldworkSupplyCost         = 1
 	permitDurationTicks         = 3
+	relicAppraiseCost           = 4
+	relicMaxVisible             = 6
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -229,6 +231,24 @@ type Permit struct {
 	IssuedAtTick int64
 }
 
+type Relic struct {
+	ID              int64
+	Name            string
+	Effect          string
+	Power           int
+	OwnerPlayerID   string
+	OwnerName       string
+	Status          string
+	FoundAtTick     int64
+	AppraisedAtTick int64
+}
+
+type RelicDefinition struct {
+	Name   string
+	Effect string
+	Power  int
+}
+
 type Project struct {
 	ID            string
 	Type          string
@@ -301,6 +321,7 @@ type Store struct {
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
 	Permits      map[string]*Permit
+	Relics       map[int64]*Relic
 	Projects     map[string]*Project
 	ActiveCrisis *Crisis
 
@@ -317,6 +338,7 @@ type Store struct {
 	NextLoanID       int64
 	NextObligationID int64
 	NextProjectID    int64
+	NextRelicID      int64
 
 	LastDailyTickDate string
 	LastTickAt        time.Time
@@ -479,6 +501,19 @@ type PermitView struct {
 	TicksLeft  int
 }
 
+type RelicView struct {
+	ID                     int64
+	Name                   string
+	Status                 string
+	EffectLabel            string
+	CanAppraise            bool
+	AppraiseDisabled       bool
+	AppraiseDisabledReason string
+	CanInvoke              bool
+	InvokeDisabled         bool
+	InvokeDisabledReason   string
+}
+
 type ProjectView struct {
 	ID         string
 	Name       string
@@ -569,6 +604,8 @@ type PageData struct {
 	Loans                   []LoanView
 	Obligations             []ObligationView
 	Permits                 []PermitView
+	Relics                  []RelicView
+	RelicAppraiseCost       int
 	Projects                []ProjectView
 	ProjectOptions          []ProjectOption
 	Crisis                  *CrisisView
@@ -594,6 +631,11 @@ const (
 	contractStanceCareful = "Careful"
 	contractStanceFast    = "Fast"
 	contractStanceQuiet   = "Quiet"
+)
+
+const (
+	relicStatusUnappraised = "Unappraised"
+	relicStatusAppraised   = "Appraised"
 )
 
 type DeliverOutcome struct {
@@ -782,6 +824,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			ContractID:   strings.TrimSpace(r.FormValue("contract_id")),
 			Stance:       strings.TrimSpace(r.FormValue("stance")),
 			TargetID:     strings.TrimSpace(r.FormValue("target_id")),
+			RelicID:      strings.TrimSpace(r.FormValue("relic_id")),
 			Claim:        strings.TrimSpace(r.FormValue("claim")),
 			Topic:        strings.TrimSpace(r.FormValue("topic")),
 			LoanID:       strings.TrimSpace(r.FormValue("loan_id")),
@@ -1017,6 +1060,7 @@ func newStore() *Store {
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
 		Permits:           map[string]*Permit{},
+		Relics:            map[int64]*Relic{},
 		Projects:          map[string]*Project{},
 		ActiveCrisis:      nil,
 		Events:            []Event{},
@@ -1065,6 +1109,7 @@ func resetStoreLocked(s *Store) {
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
 	s.Permits = map[string]*Permit{}
+	s.Relics = map[int64]*Relic{}
 	s.Projects = map[string]*Project{}
 	s.ActiveCrisis = nil
 	s.Events = []Event{}
@@ -1075,6 +1120,7 @@ func resetStoreLocked(s *Store) {
 	s.NextChatID = 0
 	s.NextMessageID = 0
 	s.NextProjectID = 0
+	s.NextRelicID = 0
 	s.LastDailyTickDate = ""
 	s.LastTickAt = now
 	s.TickCount = 0
@@ -1746,6 +1792,71 @@ func travelTicksBetween(from, to string) int {
 	return 2
 }
 
+func relicDefinitions() []RelicDefinition {
+	return []RelicDefinition{
+		{Name: "Warding Charm", Effect: "heat", Power: 2},
+		{Name: "Oathstone Shard", Effect: "rep", Power: 2},
+		{Name: "Cinder Coin", Effect: "gold", Power: 6},
+		{Name: "Whispered Sigil", Effect: "rumor", Power: 2},
+		{Name: "Harvest Token", Effect: "grain", Power: 2},
+	}
+}
+
+func randomRelicDefinition(rng *mathrand.Rand) RelicDefinition {
+	defs := relicDefinitions()
+	if len(defs) == 0 {
+		return RelicDefinition{Name: "Unnamed Relic", Effect: "gold", Power: 1}
+	}
+	return defs[rng.Intn(len(defs))]
+}
+
+func relicEffectLabel(relic *Relic) string {
+	if relic == nil {
+		return ""
+	}
+	switch relic.Effect {
+	case "heat":
+		return fmt.Sprintf("Effect: -%d heat", relic.Power)
+	case "rep":
+		return fmt.Sprintf("Effect: +%d reputation", relic.Power)
+	case "gold":
+		return fmt.Sprintf("Effect: +%dg", relic.Power)
+	case "rumor":
+		return fmt.Sprintf("Effect: +%d rumors", relic.Power)
+	case "grain":
+		return fmt.Sprintf("Effect: +%d sacks", relic.Power)
+	default:
+		return "Effect: unknown"
+	}
+}
+
+func addRelicLocked(store *Store, owner *Player, def RelicDefinition, now time.Time) *Relic {
+	if owner == nil {
+		return nil
+	}
+	store.NextRelicID++
+	id := store.NextRelicID
+	relic := &Relic{
+		ID:             id,
+		Name:           def.Name,
+		Effect:         def.Effect,
+		Power:          def.Power,
+		OwnerPlayerID:  owner.ID,
+		OwnerName:      owner.Name,
+		Status:         relicStatusUnappraised,
+		FoundAtTick:    store.TickCount,
+		AppraisedAtTick: 0,
+	}
+	store.Relics[id] = relic
+	addEventLocked(store, Event{
+		Type:     "Fieldwork",
+		Severity: 2,
+		Text:     fmt.Sprintf("[%s] recovers a sealed relic from the ruins.", owner.Name),
+		At:       now,
+	})
+	return relic
+}
+
 func addRumorLocked(store *Store, r *Rumor, now time.Time) {
 	store.NextRumorID++
 	r.ID = store.NextRumorID
@@ -1906,6 +2017,7 @@ type ActionInput struct {
 	ContractID   string
 	Stance       string
 	TargetID     string
+	RelicID      string
 	Claim        string
 	Topic        string
 	LoanID       string
@@ -2566,10 +2678,13 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		roll := store.rng.Intn(100)
 		switch {
 		case roll < 45:
-			p.Gold += 6
 			p.Rep = clampInt(p.Rep+1, -100, 100)
-			addEventLocked(store, Event{Type: "Fieldwork", Severity: 2, Text: fmt.Sprintf("[%s] recovers relics from the ruins.", p.Name), At: now})
-			setToastLocked(store, p.ID, "Relics fetched: +6g.")
+			relic := addRelicLocked(store, p, randomRelicDefinition(store.rng), now)
+			name := "a sealed relic"
+			if relic != nil {
+				name = relic.Name
+			}
+			setToastLocked(store, p.ID, fmt.Sprintf("Relic recovered: %s. Seek appraisal in the Capital.", name))
 		case roll < 75:
 			p.Rumors += 1
 			addEventLocked(store, Event{Type: "Fieldwork", Severity: 1, Text: fmt.Sprintf("[%s] unearths whispers in the ruins.", p.Name), At: now})
@@ -2580,6 +2695,82 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			addEventLocked(store, Event{Type: "Fieldwork", Severity: 3, Text: fmt.Sprintf("[%s] flees a hostile presence in the ruins.", p.Name), At: now})
 			setToastLocked(store, p.ID, "You escape, but the city hears of it.")
 		}
+	case "appraise_relic":
+		if in.RelicID == "" {
+			setToastLocked(store, p.ID, "Choose a relic to appraise.")
+			return
+		}
+		relicID, err := strconv.ParseInt(in.RelicID, 10, 64)
+		if err != nil {
+			setToastLocked(store, p.ID, "Relic entry invalid.")
+			return
+		}
+		relic := store.Relics[relicID]
+		if relic == nil || relic.OwnerPlayerID != p.ID {
+			setToastLocked(store, p.ID, "Relic not found.")
+			return
+		}
+		if relic.Status != relicStatusUnappraised {
+			setToastLocked(store, p.ID, "Relic already appraised.")
+			return
+		}
+		if p.LocationID != locationCapital {
+			setToastLocked(store, p.ID, "Appraisals are only performed in the Capital.")
+			return
+		}
+		if p.Gold < relicAppraiseCost {
+			setToastLocked(store, p.ID, fmt.Sprintf("Need %dg to appraise.", relicAppraiseCost))
+			return
+		}
+		p.Gold -= relicAppraiseCost
+		relic.Status = relicStatusAppraised
+		relic.AppraisedAtTick = store.TickCount
+		addEventLocked(store, Event{
+			Type:     "Temple",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] appraises a relic: %s.", p.Name, relic.Name),
+			At:       now,
+		})
+		setToastLocked(store, p.ID, fmt.Sprintf("Relic appraised: %s.", relicEffectLabel(relic)))
+	case "invoke_relic":
+		if in.RelicID == "" {
+			setToastLocked(store, p.ID, "Choose a relic to invoke.")
+			return
+		}
+		relicID, err := strconv.ParseInt(in.RelicID, 10, 64)
+		if err != nil {
+			setToastLocked(store, p.ID, "Relic entry invalid.")
+			return
+		}
+		relic := store.Relics[relicID]
+		if relic == nil || relic.OwnerPlayerID != p.ID {
+			setToastLocked(store, p.ID, "Relic not found.")
+			return
+		}
+		if relic.Status != relicStatusAppraised {
+			setToastLocked(store, p.ID, "Relic must be appraised first.")
+			return
+		}
+		switch relic.Effect {
+		case "heat":
+			p.Heat = maxInt(0, p.Heat-relic.Power)
+		case "rep":
+			p.Rep = clampInt(p.Rep+relic.Power, -100, 100)
+		case "gold":
+			p.Gold += relic.Power
+		case "rumor":
+			p.Rumors += relic.Power
+		case "grain":
+			p.Grain += relic.Power
+		}
+		addEventLocked(store, Event{
+			Type:     "Relic",
+			Severity: 2,
+			Text:     fmt.Sprintf("[%s] invokes %s.", p.Name, relic.Name),
+			At:       now,
+		})
+		delete(store.Relics, relic.ID)
+		setToastLocked(store, p.ID, fmt.Sprintf("Relic invoked: %s.", relicEffectLabel(relic)))
 	case "launch_project":
 		def, ok := projectDefinitionByType(in.ProjectType)
 		if !ok {
@@ -3712,6 +3903,55 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	sort.Slice(permits, func(i, j int) bool { return permits[i].PlayerName < permits[j].PlayerName })
 
+	relics := make([]RelicView, 0, len(store.Relics))
+	for _, relic := range store.Relics {
+		if relic == nil || relic.OwnerPlayerID != p.ID {
+			continue
+		}
+		effectLabel := "Effect: unknown"
+		if relic.Status == relicStatusAppraised {
+			effectLabel = relicEffectLabel(relic)
+		}
+		canAppraise := relic.Status == relicStatusUnappraised
+		appraiseDisabled := false
+		appraiseReason := ""
+		if canAppraise {
+			if traveling {
+				appraiseDisabled = true
+				appraiseReason = "Traveling."
+			} else if p.LocationID != locationCapital {
+				appraiseDisabled = true
+				appraiseReason = "Appraisals only in the Capital."
+			} else if p.Gold < relicAppraiseCost {
+				appraiseDisabled = true
+				appraiseReason = fmt.Sprintf("Need %dg.", relicAppraiseCost)
+			}
+		}
+		canInvoke := relic.Status == relicStatusAppraised
+		invokeDisabled := false
+		invokeReason := ""
+		if canInvoke && traveling {
+			invokeDisabled = true
+			invokeReason = "Traveling."
+		}
+		relics = append(relics, RelicView{
+			ID:                     relic.ID,
+			Name:                   relic.Name,
+			Status:                 relic.Status,
+			EffectLabel:            effectLabel,
+			CanAppraise:            canAppraise,
+			AppraiseDisabled:       appraiseDisabled,
+			AppraiseDisabledReason: appraiseReason,
+			CanInvoke:              canInvoke,
+			InvokeDisabled:         invokeDisabled,
+			InvokeDisabledReason:   invokeReason,
+		})
+	}
+	sort.Slice(relics, func(i, j int) bool { return relics[i].ID > relics[j].ID })
+	if len(relics) > relicMaxVisible {
+		relics = relics[:relicMaxVisible]
+	}
+
 	permitStatus := "None"
 	if permit := permitForPlayerLocked(store, p.ID); permit != nil {
 		permitStatus = fmt.Sprintf("Active (%dt)", permit.TicksLeft)
@@ -3901,6 +4141,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Loans:                   loans,
 		Obligations:             obligations,
 		Permits:                 permits,
+		Relics:                  relics,
+		RelicAppraiseCost:       relicAppraiseCost,
 		Projects:                projects,
 		ProjectOptions:          projectOptions,
 		Crisis:                  crisisView,

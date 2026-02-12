@@ -47,6 +47,7 @@
   <div class="muted" style="margin-top:6px;">{{ .LocationDescription }}</div>
   {{ if .Traveling }}
     <div class="muted" style="margin-top:6px;">En route to {{ .TravelDestination }} · {{ .TravelTicksLeft }} / {{ .TravelTotalTicks }} ticks left</div>
+    <div class="muted" style="margin-top:4px;">While traveling, other actions are paused.</div>
   {{ else }}
     {{ if gt (len .LocationOptions) 0 }}
       <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:6px;">
@@ -73,6 +74,44 @@
   {{ else }}
     <div class="muted" style="margin-top:4px;">No fieldwork available at this location.</div>
   {{ end }}
+</div>
+<div class="card" style="margin-top:12px;">
+  <h3>Relics</h3>
+  <div class="muted">Appraise relics in the Capital for {{ .RelicAppraiseCost }}g.</div>
+  <div class="contracts" style="margin-top:8px;">
+    {{ range .Relics }}
+      <div class="contract">
+        <div><strong>{{ .Name }}</strong> <span class="pill">{{ .Status }}</span></div>
+        <div class="meta">
+          <span>{{ .EffectLabel }}</span>
+        </div>
+        {{ if .AppraiseDisabledReason }}
+          <div class="contract-outcome">{{ .AppraiseDisabledReason }}</div>
+        {{ end }}
+        {{ if .InvokeDisabledReason }}
+          <div class="contract-outcome">{{ .InvokeDisabledReason }}</div>
+        {{ end }}
+        <div class="actions">
+          {{ if .CanAppraise }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="appraise_relic">
+              <input type="hidden" name="relic_id" value="{{ .ID }}">
+              <button class="secondary" type="submit" {{ if .AppraiseDisabled }}disabled{{ end }}>Appraise</button>
+            </form>
+          {{ end }}
+          {{ if .CanInvoke }}
+            <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
+              <input type="hidden" name="action" value="invoke_relic">
+              <input type="hidden" name="relic_id" value="{{ .ID }}">
+              <button type="submit" {{ if .InvokeDisabled }}disabled{{ end }}>Invoke</button>
+            </form>
+          {{ end }}
+        </div>
+      </div>
+    {{ else }}
+      <div class="muted">No relics in your possession.</div>
+    {{ end }}
+  </div>
 </div>
 <div class="card" style="margin-top:12px;">
   <h3>Institutions and Offices</h3>

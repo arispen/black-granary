@@ -199,6 +199,34 @@ func TestInvestigateCooldownByTicks(t *testing.T) {
 	}
 }
 
+func TestRelicAppraisalAndInvocation(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, Heat: 4, LocationID: locationCapital, LastSeen: now}
+	s.Players[p.ID] = p
+
+	relic := addRelicLocked(s, p, RelicDefinition{Name: "Warding Charm", Effect: "heat", Power: 2}, now)
+	if relic == nil {
+		t.Fatalf("expected relic to be created")
+	}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "appraise_relic", RelicID: fmt.Sprintf("%d", relic.ID)})
+	if relic.Status != relicStatusAppraised {
+		t.Fatalf("expected relic to be appraised")
+	}
+	if p.Gold != 20-relicAppraiseCost {
+		t.Fatalf("expected appraisal to cost %dg, got %dg", relicAppraiseCost, 20-p.Gold)
+	}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "invoke_relic", RelicID: fmt.Sprintf("%d", relic.ID)})
+	if p.Heat != 2 {
+		t.Fatalf("expected relic invoke to reduce heat to 2, got %d", p.Heat)
+	}
+	if _, ok := s.Relics[relic.ID]; ok {
+		t.Fatalf("expected relic to be removed after invocation")
+	}
+}
+
 func TestCrisisResponseResolvesWithRewards(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

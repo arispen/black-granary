@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.12.0
+- Added relic recovery from the Haunted Ruins with Temple appraisals and one-time invocations.
+- Relic dashboard card now shows appraisal status, effects, and action controls.
+- Traveling now pauses market actions and surfaces clearer travel lockout messaging.
+
 ## 0.11.0
 - Added Harbor Master permits for emergency contracts, with tick-based expiry.
 - Institutions panel now lists active permits and allows issuing permits to other players.

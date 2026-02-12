@@ -4,21 +4,24 @@
 {{ if .MarketControlsActive }}
   <div class="muted">Market controls active: {{ .MarketControlsTicks }} ticks</div>
 {{ end }}
+{{ if .Traveling }}
+  <div class="muted">Travel in progress: market actions are paused.</div>
+{{ end }}
 <div class="muted" style="margin-top:6px;">Your stockpile: {{ .MarketStockpile }} sacks</div>
 <div class="muted">Max buy {{ .MarketMaxBuy }} · Max sell {{ .MarketMaxSell }}</div>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:6px;">
   <input type="hidden" name="action" value="buy_grain">
   <input type="number" name="amount" min="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketBuyDisabled }}0{{ else }}{{ .MarketMaxBuy }}{{ end }}" value="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" style="width:70px;">
-  <button type="submit" {{ if .MarketBuyDisabled }}disabled{{ end }}>Buy</button>
+  <button type="submit" {{ if or .MarketBuyDisabled .Traveling }}disabled{{ end }}>Buy</button>
 </form>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
   <input type="hidden" name="action" value="sell_grain">
   <input type="number" name="amount" min="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketSellDisabled }}0{{ else }}{{ .MarketMaxSell }}{{ end }}" value="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" style="width:70px;">
-  <button class="secondary" type="submit" {{ if .MarketSellDisabled }}disabled{{ end }}>Sell</button>
+  <button class="secondary" type="submit" {{ if or .MarketSellDisabled .Traveling }}disabled{{ end }}>Sell</button>
 </form>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
   <input type="hidden" name="action" value="donate_relief">
-  <button class="secondary" type="submit" {{ if .ReliefDisabled }}disabled{{ end }}>{{ .ReliefLabel }}</button>
+  <button class="secondary" type="submit" {{ if or .ReliefDisabled .Traveling }}disabled{{ end }}>{{ .ReliefLabel }}</button>
 </form>
 {{ end }}
 
