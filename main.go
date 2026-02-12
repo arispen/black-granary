@@ -70,6 +70,9 @@ const (
 	forgeEvidenceDurationTicks  = 3
 	bribeAccessBaseTicks        = 2
 	bribeAccessMaxTicks         = 5
+	warrantDurationTicks        = 3
+	warrantHeatDelta            = 3
+	warrantRewardBonus          = 10
 	sealedMessageCost           = 2
 	sealedInterceptPenalty      = 15
 	locationCapital             = "capital"
@@ -132,6 +135,7 @@ type Contract struct {
 	BountyEvidence int
 	RewardGold     int
 	SupplySacks    int
+	Warranted      bool
 }
 
 type Event struct {
@@ -275,6 +279,16 @@ type Permit struct {
 	IssuedAtTick int64
 }
 
+type Warrant struct {
+	PlayerID     string
+	PlayerName   string
+	IssuerID     string
+	IssuerName   string
+	TicksLeft    int
+	TotalTicks   int
+	IssuedAtTick int64
+}
+
 type Relic struct {
 	ID              int64
 	Name            string
@@ -368,6 +382,7 @@ type Store struct {
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
 	Permits      map[string]*Permit
+	Warrants     map[string]*Warrant
 	Relics       map[int64]*Relic
 	Projects     map[string]*Project
 	ActiveCrisis *Crisis
@@ -416,6 +431,7 @@ type PlayerSummary struct {
 	Gold      int
 	Heat      int
 	HeatLabel string
+	Warrant   string
 	Online    bool
 }
 
@@ -457,6 +473,7 @@ type StandingView struct {
 	Rumors          int
 	PermitStatus    string
 	AccessStatus    string
+	WarrantStatus   string
 }
 
 type EventView struct {
@@ -501,6 +518,7 @@ type SeatView struct {
 	CanToggleEmbargo    bool
 	CanIssuePermit      bool
 	CanConductInquest   bool
+	CanIssueWarrant     bool
 }
 
 type RumorView struct {
@@ -572,6 +590,12 @@ type ObligationView struct {
 }
 
 type PermitView struct {
+	PlayerName string
+	IssuerName string
+	TicksLeft  int
+}
+
+type WarrantView struct {
 	PlayerName string
 	IssuerName string
 	TicksLeft  int
@@ -689,6 +713,7 @@ type PageData struct {
 	Loans                   []LoanView
 	Obligations             []ObligationView
 	Permits                 []PermitView
+	Warrants                []WarrantView
 	Relics                  []RelicView
 	RelicAppraiseCost       int
 	Projects                []ProjectView
@@ -1159,6 +1184,7 @@ func newStore() *Store {
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
 		Permits:           map[string]*Permit{},
+		Warrants:          map[string]*Warrant{},
 		Relics:            map[int64]*Relic{},
 		Projects:          map[string]*Project{},
 		ActiveCrisis:      nil,
@@ -1211,6 +1237,7 @@ func resetStoreLocked(s *Store) {
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
 	s.Permits = map[string]*Permit{}
+	s.Warrants = map[string]*Warrant{}
 	s.Relics = map[int64]*Relic{}
 	s.Projects = map[string]*Project{}
 	s.ActiveCrisis = nil
@@ -1484,6 +1511,13 @@ func initializeInstitutionsLocked(store *Store) {
 		HolderName:      "Clerk Marn (NPC)",
 		TenureTicksLeft: seatTenureTicks,
 	}
+	store.Seats["watch_commander"] = &Seat{
+		ID:              "watch_commander",
+		Name:            "Commander of the Watch",
+		InstitutionID:   "city_authority",
+		HolderName:      "Marshal Dain (NPC)",
+		TenureTicksLeft: seatTenureTicks,
+	}
 	store.Seats["high_curate"] = &Seat{
 		ID:              "high_curate",
 		Name:            "High Curate",
@@ -1515,6 +1549,17 @@ func processInstitutionTickLocked(store *Store, now time.Time) {
 		if permit.TicksLeft <= 0 {
 			delete(store.Permits, playerID)
 			addEventLocked(store, Event{Type: "Policy", Severity: 1, Text: fmt.Sprintf("Permit for [%s] expires.", permit.PlayerName), At: now})
+		}
+	}
+	for playerID, warrant := range store.Warrants {
+		if warrant == nil {
+			delete(store.Warrants, playerID)
+			continue
+		}
+		warrant.TicksLeft--
+		if warrant.TicksLeft <= 0 {
+			delete(store.Warrants, playerID)
+			addEventLocked(store, Event{Type: "Law", Severity: 1, Text: fmt.Sprintf("Warrant on [%s] expires.", warrant.PlayerName), At: now})
 		}
 	}
 	for _, seat := range store.Seats {
@@ -1575,6 +1620,8 @@ func seatDefaultHolderName(seatID string) string {
 		return "Captain Vey (NPC)"
 	case "master_of_coin":
 		return "Clerk Marn (NPC)"
+	case "watch_commander":
+		return "Marshal Dain (NPC)"
 	case "high_curate":
 		return "Sister Hal (NPC)"
 	default:
@@ -1597,6 +1644,18 @@ func permitForPlayerLocked(store *Store, playerID string) *Permit {
 
 func hasActivePermitLocked(store *Store, playerID string) bool {
 	return permitForPlayerLocked(store, playerID) != nil
+}
+
+func warrantForPlayerLocked(store *Store, playerID string) *Warrant {
+	warrant := store.Warrants[playerID]
+	if warrant == nil || warrant.TicksLeft <= 0 {
+		return nil
+	}
+	return warrant
+}
+
+func hasActiveWarrantLocked(store *Store, playerID string) bool {
+	return warrantForPlayerLocked(store, playerID) != nil
 }
 
 func processIntelTickLocked(store *Store, now time.Time) {
@@ -3393,6 +3452,42 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		addEventLocked(store, Event{Type: "Policy", Severity: 2, Text: fmt.Sprintf("[%s] issues a permit to [%s].", p.Name, target.Name), At: now})
 		setToastLocked(store, p.ID, "Permit issued.")
+	case "issue_warrant":
+		if !playerHoldsSeatLocked(store, p.ID, "watch_commander") {
+			setToastLocked(store, p.ID, "Only the Commander of the Watch can issue warrants.")
+			return
+		}
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid warrant target.")
+			return
+		}
+		if hasActiveWarrantLocked(store, target.ID) {
+			setToastLocked(store, p.ID, "That target is already under warrant.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		store.Warrants[target.ID] = &Warrant{
+			PlayerID:     target.ID,
+			PlayerName:   target.Name,
+			IssuerID:     p.ID,
+			IssuerName:   p.Name,
+			TicksLeft:    warrantDurationTicks,
+			TotalTicks:   warrantDurationTicks,
+			IssuedAtTick: store.TickCount,
+		}
+		target.Heat = clampInt(target.Heat+warrantHeatDelta, 0, 20)
+		target.Rep = clampInt(target.Rep-1, -100, 100)
+		addEventLocked(store, Event{Type: "Law", Severity: 3, Text: fmt.Sprintf("[%s] issues a warrant on [%s].", p.Name, target.Name), At: now})
+		if !hasActiveBountyForTargetLocked(store, target.ID) {
+			issueBountyContractLocked(store, target, bountyDeadlineTicks)
+			addEventLocked(store, Event{Type: "Law", Severity: 3, Text: fmt.Sprintf("[City Watch] posts a warrant bounty on [%s].", target.Name), At: now})
+		}
+		setToastLocked(store, p.ID, fmt.Sprintf("Warrant issued for %s.", target.Name))
+		setToastLocked(store, target.ID, "A warrant has been issued in your name.")
 	case "toggle_embargo":
 		if !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
 			setToastLocked(store, p.ID, "Only the Harbor Master can set embargoes.")
@@ -3636,6 +3731,11 @@ func issueBountyContractLocked(store *Store, target *Player, deadline int) {
 	store.NextContractID++
 	id := fmt.Sprintf("c-%d", store.NextContractID)
 	reward := clampInt(18+target.Heat*2, 20, 70)
+	warranted := false
+	if hasActiveWarrantLocked(store, target.ID) {
+		reward += warrantRewardBonus
+		warranted = true
+	}
 	store.Contracts[id] = &Contract{
 		ID:             id,
 		Type:           "Bounty",
@@ -3646,6 +3746,7 @@ func issueBountyContractLocked(store *Store, target *Player, deadline int) {
 		TargetName:     target.Name,
 		BountyReward:   reward,
 		BountyEvidence: bountyEvidenceMin,
+		Warranted:      warranted,
 	}
 }
 
@@ -3896,7 +3997,11 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			}
 			requirementNotes = append(requirementNotes, fmt.Sprintf("Requirement: evidence strength %d+ on target.", required))
 			if c.BountyReward > 0 {
-				rewardNote = fmt.Sprintf("Reward: %dg.", c.BountyReward)
+				if c.Warranted {
+					rewardNote = fmt.Sprintf("Reward: %dg (warranted).", c.BountyReward)
+				} else {
+					rewardNote = fmt.Sprintf("Reward: %dg.", c.BountyReward)
+				}
 			}
 		}
 		if isSupply {
@@ -4043,6 +4148,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 
 	players := make([]PlayerSummary, 0, len(store.Players))
 	for _, pl := range store.Players {
+		warrantLabel := ""
+		if warrant := warrantForPlayerLocked(store, pl.ID); warrant != nil {
+			warrantLabel = fmt.Sprintf("Warrant (%dt)", warrant.TicksLeft)
+		}
 		players = append(players, PlayerSummary{
 			Name:      pl.Name,
 			Rep:       pl.Rep,
@@ -4050,6 +4159,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			Gold:      pl.Gold,
 			Heat:      pl.Heat,
 			HeatLabel: standingHeatLabel(pl.Heat),
+			Warrant:   warrantLabel,
 			Online:    now.Sub(pl.LastSeen) <= onlineWindow,
 		})
 	}
@@ -4109,7 +4219,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		sealMessageNote = fmt.Sprintf("Need %dg to seal a missive.", sealedMessageCost)
 	}
 
-	seatOrder := []string{"harbor_master", "master_of_coin", "high_curate"}
+	seatOrder := []string{"harbor_master", "master_of_coin", "watch_commander", "high_curate"}
 	seats := make([]SeatView, 0, len(seatOrder))
 	for _, seatID := range seatOrder {
 		seat := store.Seats[seatID]
@@ -4122,6 +4232,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		}
 		canIssuePermit := seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID && store.Policies.PermitRequiredHighRisk && hasOtherPlayers && highImpactRemaining > 0
 		canConductInquest := seat.ID == "high_curate" && seat.HolderPlayerID == p.ID && hasOtherPlayers && highImpactRemaining > 0
+		canIssueWarrant := seat.ID == "watch_commander" && seat.HolderPlayerID == p.ID && hasOtherPlayers && highImpactRemaining > 0
 		seats = append(seats, SeatView{
 			ID:                  seat.ID,
 			Name:                seat.Name,
@@ -4138,6 +4249,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CanToggleEmbargo:    seat.ID == "harbor_master" && seat.HolderPlayerID == p.ID,
 			CanIssuePermit:      canIssuePermit,
 			CanConductInquest:   canConductInquest,
+			CanIssueWarrant:     canIssueWarrant,
 		})
 	}
 
@@ -4369,6 +4481,19 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	}
 	sort.Slice(permits, func(i, j int) bool { return permits[i].PlayerName < permits[j].PlayerName })
 
+	warrants := make([]WarrantView, 0, len(store.Warrants))
+	for _, warrant := range store.Warrants {
+		if warrant == nil || warrant.TicksLeft <= 0 {
+			continue
+		}
+		warrants = append(warrants, WarrantView{
+			PlayerName: warrant.PlayerName,
+			IssuerName: warrant.IssuerName,
+			TicksLeft:  warrant.TicksLeft,
+		})
+	}
+	sort.Slice(warrants, func(i, j int) bool { return warrants[i].PlayerName < warrants[j].PlayerName })
+
 	relics := make([]RelicView, 0, len(store.Relics))
 	for _, relic := range store.Relics {
 		if relic == nil || relic.OwnerPlayerID != p.ID {
@@ -4425,6 +4550,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	accessStatus := "Clear"
 	if p.BribeAccessTicks > 0 {
 		accessStatus = fmt.Sprintf("Bribed (%dt)", p.BribeAccessTicks)
+	}
+	warrantStatus := "Clear"
+	if warrant := warrantForPlayerLocked(store, p.ID); warrant != nil {
+		warrantStatus = fmt.Sprintf("Active (%dt)", warrant.TicksLeft)
 	}
 
 	toast := ""
@@ -4574,6 +4703,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			Rumors:          p.Rumors,
 			PermitStatus:    permitStatus,
 			AccessStatus:    accessStatus,
+			WarrantStatus:   warrantStatus,
 		},
 		World:                   store.World,
 		Situation:               store.World.Situation,
@@ -4620,6 +4750,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Loans:                   loans,
 		Obligations:             obligations,
 		Permits:                 permits,
+		Warrants:                warrants,
 		Relics:                  relics,
 		RelicAppraiseCost:       relicAppraiseCost,
 		Projects:                projects,

@@ -39,6 +39,7 @@
     <div class="card"><strong>Rumors</strong><br>{{ .Standing.Rumors }}</div>
     <div class="card"><strong>Permit</strong><br>{{ .Standing.PermitStatus }}</div>
     <div class="card"><strong>Access</strong><br>{{ .Standing.AccessStatus }}</div>
+    <div class="card"><strong>Warrant</strong><br>{{ .Standing.WarrantStatus }}</div>
     <div class="card"><strong>High Impact</strong><br>{{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
   </div>
 </div>
@@ -208,6 +209,9 @@
 <div class="card" style="margin-top:12px;">
   <h3>Contracts</h3>
   <div class="muted">Accepted by you: {{ .AcceptedCount }} · Showing: {{ .VisibleContractN }} / {{ .TotalContractN }}</div>
+  {{ if .Traveling }}
+    <div class="muted" style="margin-top:4px;">Travel in progress: contract actions are paused.</div>
+  {{ end }}
   <div class="contracts" style="margin-top:8px;">
     {{ range .Contracts }}
       <div class="contract {{ .UrgencyClass }}">

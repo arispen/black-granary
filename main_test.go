@@ -175,6 +175,63 @@ func TestPermitExpiresOnInstitutionTick(t *testing.T) {
 	}
 }
 
+func TestWarrantIssuanceCreatesBounty(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	commander := &Player{ID: "p1", Name: "Commander", Gold: 20, Rep: 40, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 20, Rep: 5, LastSeen: now}
+	s.Players[commander.ID] = commander
+	s.Players[target.ID] = target
+
+	seat := s.Seats["watch_commander"]
+	seat.HolderPlayerID = commander.ID
+	seat.HolderName = commander.Name
+
+	handleActionInputLocked(s, commander, now, ActionInput{Action: "issue_warrant", TargetID: target.ID})
+
+	if warrantForPlayerLocked(s, target.ID) == nil {
+		t.Fatalf("expected warrant to be issued")
+	}
+	if target.Heat != warrantHeatDelta {
+		t.Fatalf("expected target heat to be %d, got %d", warrantHeatDelta, target.Heat)
+	}
+	found := false
+	for _, c := range s.Contracts {
+		if c.Type == "Bounty" && c.TargetPlayerID == target.ID {
+			found = true
+			if !c.Warranted {
+				t.Fatalf("expected bounty to be flagged as warranted")
+			}
+			expectedReward := clampInt(18+target.Heat*2, 20, 70) + warrantRewardBonus
+			if c.BountyReward != expectedReward {
+				t.Fatalf("expected bounty reward %d, got %d", expectedReward, c.BountyReward)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected bounty contract to be issued for warrant")
+	}
+}
+
+func TestWarrantExpiresOnInstitutionTick(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	s.Warrants[p.ID] = &Warrant{
+		PlayerID:   p.ID,
+		PlayerName: p.Name,
+		IssuerName: "Commander",
+		TicksLeft:  1,
+		TotalTicks: 1,
+	}
+	processInstitutionTickLocked(s, now)
+	if s.Warrants[p.ID] != nil {
+		t.Fatalf("expected warrant to expire on tick")
+	}
+}
+
 func TestBribeAccessAllowsEmergencyAcceptance(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

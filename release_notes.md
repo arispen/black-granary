@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.20.0
+- Added Commander of the Watch seat with warrant issuance and time-bound warrant tracking.
+- Warranted targets now spawn boosted bounty rewards and show warrant status in the UI.
+- Contracts panel now calls out travel lockouts, and Institutions lists active warrants.
+
 ## 0.19.0
 - Added sealed missives to diplomacy with a gold cost and seal indicators.
 - Courier intercepts now penalize sealed messages and redact sealed intel.
