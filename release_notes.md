@@ -1,5 +1,12 @@
 # Release Notes
 
+## 0.22.0
+- Added SQL-backed persistence with dialect switching via `DB_DIALECT=sqlite|postgres`.
+- Added parallel dialect migrations under `migrations/sqlite` and `migrations/postgres` with aligned logical schema.
+- Added daily retention cleanup job for events/chat/diplomatic messages plus loan/obligation/player lifecycle retention.
+- Kept gameplay/handler logic dialect-agnostic while isolating driver and migration differences in the DB adapter.
+- Persisted only active contracts (`Issued`, `Accepted`), with narrative outcomes retained in events.
+
 ## 0.21.0
 - Added colorful, CSS-tinted game icons across core panels (dashboard, events, chat, diplomacy, players, institutions, intel, ledger, market).
 - Introduced dynamic location and contract-type icons in the dashboard for faster visual scanning.
