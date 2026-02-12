@@ -24,6 +24,7 @@ const (
 	maxEvents                   = 300
 	maxChat                     = 200
 	maxDiplomacyMessages        = 200
+	maxVisibleIntercepts        = 6
 	maxVisibleContracts         = 12
 	maxVisibleMessages          = 20
 	onlineWindow                = 60 * time.Second
@@ -64,6 +65,7 @@ const (
 	relicAppraiseCost           = 4
 	relicMaxVisible             = 6
 	scryReportDurationTicks     = 3
+	interceptDurationTicks      = 3
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -152,6 +154,18 @@ type DiplomaticMessage struct {
 	Subject      string
 	Body         string
 	At           time.Time
+}
+
+type InterceptedMessage struct {
+	ID            int64
+	OwnerPlayerID string
+	OwnerName     string
+	FromName      string
+	ToName        string
+	Subject       string
+	Body          string
+	At            time.Time
+	ExpiryTick    int64
 }
 
 type Institution struct {
@@ -337,6 +351,7 @@ type Store struct {
 	Rumors       map[int64]*Rumor
 	Evidence     map[int64]*Evidence
 	ScryReports  map[int64]*ScryReport
+	Intercepts   map[int64]*InterceptedMessage
 	Loans        map[string]*Loan
 	Obligations  map[string]*Obligation
 	Permits      map[string]*Permit
@@ -355,6 +370,7 @@ type Store struct {
 	NextRumorID      int64
 	NextEvidenceID   int64
 	NextScryID       int64
+	NextInterceptID  int64
 	NextLoanID       int64
 	NextObligationID int64
 	NextProjectID    int64
@@ -503,6 +519,16 @@ type ScryReportView struct {
 	ExpiryIn     int64
 }
 
+type InterceptView struct {
+	ID       int64
+	FromName string
+	ToName   string
+	Subject  string
+	Body     string
+	At       string
+	ExpiryIn int64
+}
+
 type LoanView struct {
 	ID           string
 	LenderName   string
@@ -634,6 +660,7 @@ type PageData struct {
 	Rumors                  []RumorView
 	Evidence                []EvidenceView
 	ScryReports             []ScryReportView
+	Intercepts              []InterceptView
 	Loans                   []LoanView
 	Obligations             []ObligationView
 	Permits                 []PermitView
@@ -1092,6 +1119,7 @@ func newStore() *Store {
 		Rumors:            map[int64]*Rumor{},
 		Evidence:          map[int64]*Evidence{},
 		ScryReports:       map[int64]*ScryReport{},
+		Intercepts:        map[int64]*InterceptedMessage{},
 		Loans:             map[string]*Loan{},
 		Obligations:       map[string]*Obligation{},
 		Permits:           map[string]*Permit{},
@@ -1143,6 +1171,7 @@ func resetStoreLocked(s *Store) {
 	s.Rumors = map[int64]*Rumor{}
 	s.Evidence = map[int64]*Evidence{}
 	s.ScryReports = map[int64]*ScryReport{}
+	s.Intercepts = map[int64]*InterceptedMessage{}
 	s.Loans = map[string]*Loan{}
 	s.Obligations = map[string]*Obligation{}
 	s.Permits = map[string]*Permit{}
@@ -1159,6 +1188,7 @@ func resetStoreLocked(s *Store) {
 	s.NextProjectID = 0
 	s.NextRelicID = 0
 	s.NextScryID = 0
+	s.NextInterceptID = 0
 	s.LastDailyTickDate = ""
 	s.LastTickAt = now
 	s.TickCount = 0
@@ -1565,6 +1595,12 @@ func processIntelTickLocked(store *Store, now time.Time) {
 			delete(store.ScryReports, id)
 		}
 	}
+
+	for id, intercept := range store.Intercepts {
+		if intercept.ExpiryTick <= store.TickCount {
+			delete(store.Intercepts, id)
+		}
+	}
 }
 
 func processFinanceTickLocked(store *Store, now time.Time) {
@@ -1968,6 +2004,38 @@ func addScryReportLocked(store *Store, owner *Player, target *Player) {
 		Grain:           target.Grain,
 		ExpiryTick:      store.TickCount + scryReportDurationTicks,
 	}
+}
+
+func addInterceptLocked(store *Store, owner *Player, msg *DiplomaticMessage) {
+	if owner == nil || msg == nil {
+		return
+	}
+	store.NextInterceptID++
+	id := store.NextInterceptID
+	store.Intercepts[id] = &InterceptedMessage{
+		ID:            id,
+		OwnerPlayerID: owner.ID,
+		OwnerName:     owner.Name,
+		FromName:      msg.FromName,
+		ToName:        msg.ToName,
+		Subject:       msg.Subject,
+		Body:          msg.Body,
+		At:            msg.At,
+		ExpiryTick:    store.TickCount + interceptDurationTicks,
+	}
+}
+
+func mostRecentDiplomaticMessageForTarget(store *Store, targetID string) *DiplomaticMessage {
+	if store == nil || targetID == "" {
+		return nil
+	}
+	for i := len(store.Messages) - 1; i >= 0; i-- {
+		msg := store.Messages[i]
+		if msg.FromPlayerID == targetID || msg.ToPlayerID == targetID {
+			return &store.Messages[i]
+		}
+	}
+	return nil
 }
 
 func strongestEvidenceForLocked(store *Store, sourceID, targetID string) *Evidence {
@@ -2457,6 +2525,45 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			p.Heat = clampInt(p.Heat+1, 0, 20)
 			setToastLocked(store, p.ID, "The scrying ritual falters and leaves traces.")
 			setToastLocked(store, target.ID, "A scrying attempt brushes past your wards.")
+		}
+	case "intercept_courier":
+		target := store.Players[in.TargetID]
+		if target == nil || target.ID == p.ID {
+			setToastLocked(store, p.ID, "Choose a valid courier target.")
+			return
+		}
+		msg := mostRecentDiplomaticMessageForTarget(store, target.ID)
+		if msg == nil {
+			setToastLocked(store, p.ID, "No courier traffic to intercept.")
+			return
+		}
+		if tooSoonTick(store.LastIntelActionAt[p.ID], store.TickCount, 1) {
+			setToastLocked(store, p.ID, "Intercept cooldown active.")
+			return
+		}
+		if !consumeHighImpactBudgetLocked(store, p.ID, now) {
+			setToastLocked(store, p.ID, "Daily cap reached for high-impact actions.")
+			return
+		}
+		store.LastIntelActionAt[p.ID] = store.TickCount
+		successChance := 45 + maxInt(0, p.Rep)/3 + target.Heat/2 - maxInt(0, target.Rep)/6
+		if store.World.WardNetworkTicks > 0 {
+			successChance = maxInt(10, successChance-10)
+		}
+		if rollPercent(store.rng, minInt(successChance, 85)) {
+			addInterceptLocked(store, p, msg)
+			addEventLocked(store, Event{
+				Type:     "Intel",
+				Severity: 2,
+				Text:     fmt.Sprintf("[%s] intercepts a courier bound for [%s].", p.Name, target.Name),
+				At:       now,
+			})
+			setToastLocked(store, p.ID, "Courier intercepted; missive logged.")
+		} else {
+			p.Rep = clampInt(p.Rep-1, -100, 100)
+			p.Heat = clampInt(p.Heat+1, 0, 20)
+			setToastLocked(store, p.ID, "The courier slips past your agents.")
+			setToastLocked(store, target.ID, "Your couriers report a near miss.")
 		}
 	case "loan_offer":
 		target := store.Players[in.TargetID]
@@ -3993,6 +4100,26 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		scryReports = scryReports[:6]
 	}
 
+	intercepts := make([]InterceptView, 0, len(store.Intercepts))
+	for _, intercept := range store.Intercepts {
+		if intercept.OwnerPlayerID != p.ID {
+			continue
+		}
+		intercepts = append(intercepts, InterceptView{
+			ID:       intercept.ID,
+			FromName: intercept.FromName,
+			ToName:   intercept.ToName,
+			Subject:  intercept.Subject,
+			Body:     intercept.Body,
+			At:       intercept.At.Format("15:04:05"),
+			ExpiryIn: int64(maxInt(0, int(intercept.ExpiryTick-store.TickCount))),
+		})
+	}
+	sort.Slice(intercepts, func(i, j int) bool { return intercepts[i].ID > intercepts[j].ID })
+	if len(intercepts) > maxVisibleIntercepts {
+		intercepts = intercepts[:maxVisibleIntercepts]
+	}
+
 	loans := make([]LoanView, 0, len(store.Loans))
 	for _, ln := range store.Loans {
 		if ln.BorrowerPlayerID != p.ID && ln.LenderPlayerID != p.ID {
@@ -4289,6 +4416,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		Rumors:                  rumors,
 		Evidence:                evidence,
 		ScryReports:             scryReports,
+		Intercepts:              intercepts,
 		Loans:                   loans,
 		Obligations:             obligations,
 		Permits:                 permits,

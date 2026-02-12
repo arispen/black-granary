@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.15.0
+- Added courier intercept intel action that captures short-lived missives.
+- Intel panel now lists intercepted missives with expiry timers.
+- Market buy/sell inputs now disable when trading is blocked or traveling.
+
 ## 0.14.0
 - Added Ward Lanterns public works project that activates a temporary ward network.
 - Ward network dampens rumor spread and reduces scrying success chances while active.

@@ -38,6 +38,13 @@
     <button class="secondary" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Scry Target</button>
   </form>
   <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
+    <input type="hidden" name="action" value="intercept_courier">
+    <select name="target_id" aria-label="Intercept target" {{ if $.Traveling }}disabled{{ end }}>
+      {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+    </select>
+    <button class="secondary" type="submit" {{ if or (eq .HighImpactRemaining 0) $.Traveling }}disabled{{ end }}>Intercept Courier</button>
+  </form>
+  <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
     <input type="hidden" name="action" value="counter_narrative">
     <select name="target_id" aria-label="Counter target" {{ if $.Traveling }}disabled{{ end }}>
       {{ range .PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
@@ -84,6 +91,16 @@
       <div>Rep {{ .Rep }} · Heat {{ .Heat }} · Gold {{ .Gold }} · Grain {{ .Grain }}</div>
     </div>
   {{ else }}<div class="muted">No active scrying reports.</div>{{ end }}
+</div>
+<div class="muted" style="margin-top:8px;">Intercepted Missives</div>
+<div class="events" style="max-height:140px;">
+  {{ range .Intercepts }}
+    <div class="event-line">
+      <div class="event-meta">{{ .At }} · {{ .FromName }} -> {{ .ToName }} · expires {{ .ExpiryIn }}</div>
+      <div><strong>{{ .Subject }}</strong></div>
+      <div>{{ .Body }}</div>
+    </div>
+  {{ else }}<div class="muted">No intercepted missives.</div>{{ end }}
 </div>
 {{ end }}
 

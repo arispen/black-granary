@@ -237,6 +237,60 @@ func TestScryReportExpires(t *testing.T) {
 	}
 }
 
+func TestInterceptCourierCapturesMessage(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	interceptor := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 100, LastSeen: now}
+	target := &Player{ID: "p2", Name: "Bran Vale (Guest)", Gold: 12, Rep: 0, Heat: 20, LastSeen: now}
+	other := &Player{ID: "p3", Name: "Corin Thorne (Guest)", Gold: 15, Rep: 0, LastSeen: now}
+	s.Players[interceptor.ID] = interceptor
+	s.Players[target.ID] = target
+	s.Players[other.ID] = other
+
+	s.Messages = append(s.Messages, DiplomaticMessage{
+		ID:           1,
+		FromPlayerID: target.ID,
+		FromName:     target.Name,
+		ToPlayerID:   other.ID,
+		ToName:       other.Name,
+		Subject:      "Quiet route",
+		Body:         "Meet at dusk.",
+		At:           now,
+	})
+
+	handleActionInputLocked(s, interceptor, now, ActionInput{Action: "intercept_courier", TargetID: target.ID})
+	if len(s.Intercepts) != 1 {
+		t.Fatalf("expected intercept to be created")
+	}
+}
+
+func TestInterceptExpires(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	owner := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[owner.ID] = owner
+	msg := &DiplomaticMessage{
+		ID:           1,
+		FromPlayerID: "p2",
+		FromName:     "Bran Vale (Guest)",
+		ToPlayerID:   "p3",
+		ToName:       "Corin Thorne (Guest)",
+		Subject:      "Test",
+		Body:         "Payload.",
+		At:           now,
+	}
+	s.TickCount = 5
+	addInterceptLocked(s, owner, msg)
+	if len(s.Intercepts) != 1 {
+		t.Fatalf("expected intercept to be added")
+	}
+	s.TickCount = 5 + interceptDurationTicks
+	processIntelTickLocked(s, now)
+	if len(s.Intercepts) != 0 {
+		t.Fatalf("expected intercepts to expire on tick")
+	}
+}
+
 func TestRelicAppraisalAndInvocation(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()

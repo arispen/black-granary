@@ -11,12 +11,12 @@
 <div class="muted">Max buy {{ .MarketMaxBuy }} · Max sell {{ .MarketMaxSell }}</div>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" style="margin-top:6px;">
   <input type="hidden" name="action" value="buy_grain">
-  <input type="number" name="amount" min="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketBuyDisabled }}0{{ else }}{{ .MarketMaxBuy }}{{ end }}" value="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" style="width:70px;">
+  <input type="number" name="amount" min="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketBuyDisabled }}0{{ else }}{{ .MarketMaxBuy }}{{ end }}" value="{{ if .MarketBuyDisabled }}0{{ else }}1{{ end }}" style="width:70px;" {{ if or .MarketBuyDisabled .Traveling }}disabled{{ end }}>
   <button type="submit" {{ if or .MarketBuyDisabled .Traveling }}disabled{{ end }}>Buy</button>
 </form>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
   <input type="hidden" name="action" value="sell_grain">
-  <input type="number" name="amount" min="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketSellDisabled }}0{{ else }}{{ .MarketMaxSell }}{{ end }}" value="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" style="width:70px;">
+  <input type="number" name="amount" min="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" max="{{ if .MarketSellDisabled }}0{{ else }}{{ .MarketMaxSell }}{{ end }}" value="{{ if .MarketSellDisabled }}0{{ else }}1{{ end }}" style="width:70px;" {{ if or .MarketSellDisabled .Traveling }}disabled{{ end }}>
   <button class="secondary" type="submit" {{ if or .MarketSellDisabled .Traveling }}disabled{{ end }}>Sell</button>
 </form>
 <form class="actions" hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
