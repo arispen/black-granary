@@ -68,6 +68,8 @@ const (
 	interceptDurationTicks      = 3
 	forgeEvidenceCost           = 3
 	forgeEvidenceDurationTicks  = 3
+	bribeAccessBaseTicks        = 2
+	bribeAccessMaxTicks         = 5
 	locationCapital             = "capital"
 	locationHarbor              = "harbor"
 	locationFrontier            = "frontier"
@@ -103,6 +105,7 @@ type Player struct {
 	CompletedContractsToday int
 	CompletedTodayDateUTC   string
 	RiteImmunityTicks       int
+	BribeAccessTicks        int
 	LocationID              string
 	TravelToID              string
 	TravelTicksLeft         int
@@ -449,6 +452,7 @@ type StandingView struct {
 	CompletedTotal  int
 	Rumors          int
 	PermitStatus    string
+	AccessStatus    string
 }
 
 type EventView struct {
@@ -1242,7 +1246,7 @@ func runWorldTickLocked(store *Store, now time.Time) {
 	processIntelTickLocked(store, now)
 	processFinanceTickLocked(store, now)
 	processProjectTickLocked(store, now)
-	processPlayerTickLocked(store)
+	processPlayerTickLocked(store, now)
 	processTravelTickLocked(store, now)
 	w := &store.World
 	prevGrainTier := w.GrainTier
@@ -1807,10 +1811,16 @@ func processCrisisTickLocked(store *Store, now time.Time) {
 	}
 }
 
-func processPlayerTickLocked(store *Store) {
+func processPlayerTickLocked(store *Store, now time.Time) {
 	for _, p := range store.Players {
 		if p.RiteImmunityTicks > 0 {
 			p.RiteImmunityTicks--
+		}
+		if p.BribeAccessTicks > 0 {
+			p.BribeAccessTicks--
+			if p.BribeAccessTicks == 0 {
+				addEventLocked(store, Event{Type: "Institution", Severity: 1, Text: fmt.Sprintf("Officials stop extending favors to [%s].", p.Name), At: now})
+			}
 		}
 	}
 }
@@ -2237,15 +2247,16 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 			setToastLocked(store, p.ID, "You cannot accept your own contract.")
 			return
 		}
+		hasBribedAccess := p.BribeAccessTicks > 0
 		if c.Type == "Smuggling" && p.Rep < -50 {
 			setToastLocked(store, p.ID, "Your reputation blocks smuggling contracts.")
 			return
 		}
-		if c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+		if c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasBribedAccess {
 			setToastLocked(store, p.ID, "Smuggling is under embargo.")
 			return
 		}
-		if c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID) {
+		if c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID) && !hasBribedAccess {
 			setToastLocked(store, p.ID, "Permit required for emergency contracts.")
 			return
 		}
@@ -2819,11 +2830,16 @@ func handleActionInputLocked(store *Store, p *Player, now time.Time, in ActionIn
 		}
 		p.Gold -= cost
 		p.Heat = clampInt(p.Heat+2, 0, 20)
+		duration := bribeAccessBaseTicks
+		if cost >= 6 {
+			duration++
+		}
+		p.BribeAccessTicks = minInt(bribeAccessMaxTicks, p.BribeAccessTicks+duration)
 		if targetSeat != nil && targetSeat.HolderPlayerID != "" && targetSeat.HolderPlayerID != p.ID {
 			p.Rep = clampInt(p.Rep+1, -100, 100)
 		}
 		addEventLocked(store, Event{Type: "Institution", Severity: 3, Text: fmt.Sprintf("[%s] bribes officials for temporary access.", p.Name), At: now})
-		setToastLocked(store, p.ID, "Bribe executed.")
+		setToastLocked(store, p.ID, fmt.Sprintf("Bribe executed: access secured for %d ticks.", p.BribeAccessTicks))
 	case "petition_institution":
 		if p.Rep >= 10 {
 			p.Heat = maxInt(0, p.Heat-1)
@@ -3771,8 +3787,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		canAbandon := c.Status == "Accepted" && c.OwnerPlayerID == p.ID
 		canCancel := c.Status == "Issued" && c.IssuerPlayerID == p.ID
 		canDeliver := (c.Status == "Accepted" && c.OwnerPlayerID == p.ID) || (c.Status == "Fulfilled" && c.OwnerPlayerID == p.ID)
-		permitRequired := c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID)
-		if permitRequired {
+		hasBribedAccess := p.BribeAccessTicks > 0
+		permitRequired := c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasActivePermitLocked(store, p.ID) && !hasBribedAccess
+		embargoBlocks := c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") && !hasBribedAccess
+		if permitRequired || embargoBlocks {
 			canAccept = false
 		}
 
@@ -3832,6 +3850,15 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		requirementNotes := []string{}
 		if permitRequired {
 			requirementNotes = append(requirementNotes, "Requirement: permit required for emergency contracts.")
+		}
+		if embargoBlocks {
+			requirementNotes = append(requirementNotes, fmt.Sprintf("Requirement: smuggling embargo active (%dt).", store.Policies.SmugglingEmbargoTicks))
+		}
+		if hasBribedAccess && c.Type == "Emergency" && store.Policies.PermitRequiredHighRisk && p.Rep < 20 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			requirementNotes = append(requirementNotes, fmt.Sprintf("Bribed access bypasses permits (%dt).", p.BribeAccessTicks))
+		}
+		if hasBribedAccess && c.Type == "Smuggling" && store.Policies.SmugglingEmbargoTicks > 0 && !playerHoldsSeatLocked(store, p.ID, "harbor_master") {
+			requirementNotes = append(requirementNotes, fmt.Sprintf("Bribed access bypasses embargo (%dt).", p.BribeAccessTicks))
 		}
 		if isBounty {
 			required := c.BountyEvidence
@@ -4352,6 +4379,10 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 	if permit := permitForPlayerLocked(store, p.ID); permit != nil {
 		permitStatus = fmt.Sprintf("Active (%dt)", permit.TicksLeft)
 	}
+	accessStatus := "Clear"
+	if p.BribeAccessTicks > 0 {
+		accessStatus = fmt.Sprintf("Bribed (%dt)", p.BribeAccessTicks)
+	}
 
 	toast := ""
 	if consumeToast {
@@ -4499,6 +4530,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			CompletedTotal:  p.CompletedContracts,
 			Rumors:          p.Rumors,
 			PermitStatus:    permitStatus,
+			AccessStatus:    accessStatus,
 		},
 		World:                   store.World,
 		Situation:               store.World.Situation,

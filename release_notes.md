@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.18.0
+- Bribes now grant temporary corrupt access that bypasses permits and embargoes.
+- Contract cards surface embargo/permit requirements plus bribed access notes.
+- Dashboard standing shows access status and disables actions while traveling.
+
 ## 0.17.0
 - Added High Curate inquest action to purge forged evidence and dampen rumor waves on a target.
 - Institutions/Offices now surface the Conduct Inquest control with high-impact budgeting.

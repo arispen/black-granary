@@ -38,6 +38,7 @@
     <div class="card"><strong>Impact Total</strong><br>{{ .Standing.CompletedTotal }}</div>
     <div class="card"><strong>Rumors</strong><br>{{ .Standing.Rumors }}</div>
     <div class="card"><strong>Permit</strong><br>{{ .Standing.PermitStatus }}</div>
+    <div class="card"><strong>Access</strong><br>{{ .Standing.AccessStatus }}</div>
     <div class="card"><strong>High Impact</strong><br>{{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
   </div>
 </div>
@@ -133,47 +134,47 @@
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="campaign_seat">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button type="submit">Campaign</button>
+              <button type="submit" {{ if $.Traveling }}disabled{{ end }}>Campaign</button>
             </form>
           {{ end }}
           {{ if .CanChallenge }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="challenge_seat">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="secondary" type="submit">Challenge</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Challenge</button>
             </form>
           {{ end }}
           {{ if .CanToggleTaxHigh }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="set_tax_high">
-              <button class="secondary" type="submit">Tax 20%</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Tax 20%</button>
             </form>
           {{ end }}
           {{ if .CanToggleTaxLow }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="set_tax_low">
-              <button class="secondary" type="submit">Tax 5%</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Tax 5%</button>
             </form>
           {{ end }}
           {{ if .CanTogglePermit }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="toggle_permit">
-              <button class="secondary" type="submit">{{ if $.Policies.PermitRequiredHighRisk }}Open Permits{{ else }}Require Permits{{ end }}</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>{{ if $.Policies.PermitRequiredHighRisk }}Open Permits{{ else }}Require Permits{{ end }}</button>
             </form>
           {{ end }}
           {{ if .CanToggleEmbargo }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="toggle_embargo">
-              <button class="secondary" type="submit">{{ if gt $.Policies.SmugglingEmbargoTicks 0 }}Lift Embargo{{ else }}Impose Embargo{{ end }}</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>{{ if gt $.Policies.SmugglingEmbargoTicks 0 }}Lift Embargo{{ else }}Impose Embargo{{ end }}</button>
             </form>
           {{ end }}
           {{ if .CanIssuePermit }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button,select">
               <input type="hidden" name="action" value="issue_permit">
-              <select name="target_id" aria-label="Permit recipient">
+              <select name="target_id" aria-label="Permit recipient" {{ if $.Traveling }}disabled{{ end }}>
                 {{ range $.PlayerOptions }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
               </select>
-              <button class="secondary" type="submit">Issue Permit ({{ $.HighImpactRemaining }}/{{ $.HighImpactCap }})</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Issue Permit ({{ $.HighImpactRemaining }}/{{ $.HighImpactCap }})</button>
             </form>
           {{ end }}
           {{ if .CanConductInquest }}
@@ -233,41 +234,41 @@
               <input type="hidden" name="action" value="accept">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
               {{ if and (not .IsBounty) (not .IsSupply) }}
-                <select name="stance" aria-label="Choose stance">
+                <select name="stance" aria-label="Choose stance" {{ if $.Traveling }}disabled{{ end }}>
                   <option value="Careful" selected>Careful</option>
                   <option value="Fast">Fast</option>
                   <option value="Quiet">Quiet</option>
                 </select>
               {{ end }}
-              <button type="submit">Accept</button>
+              <button type="submit" {{ if $.Traveling }}disabled{{ end }}>Accept</button>
             </form>
           {{ end }}
           {{ if .CanIgnore }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="ignore">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="secondary" type="submit">Ignore</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Ignore</button>
             </form>
           {{ end }}
           {{ if .CanAbandon }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="abandon">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="secondary" type="submit">Abandon</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Abandon</button>
             </form>
           {{ end }}
           {{ if .CanCancel }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="cancel_contract">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="secondary" type="submit">Withdraw</button>
+              <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Withdraw</button>
             </form>
           {{ end }}
           {{ if .CanDeliver }}
             <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML" hx-disabled-elt="button">
               <input type="hidden" name="action" value="deliver">
               <input type="hidden" name="contract_id" value="{{ .ID }}">
-              <button class="warn" type="submit" {{ if .DeliverDisabled }}disabled{{ end }}>{{ .DeliverLabel }}</button>
+              <button class="warn" type="submit" {{ if or .DeliverDisabled $.Traveling }}disabled{{ end }}>{{ .DeliverLabel }}</button>
             </form>
           {{ end }}
         </div>
@@ -279,30 +280,30 @@
   <div class="actions" style="margin-top:10px;">
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="investigate">
-      <button type="submit" {{ if .InvestigateDisabled }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
+      <button type="submit" {{ if or .InvestigateDisabled $.Traveling }}disabled{{ end }}>{{ .InvestigateLabel }}</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="post_supply">
-      <input type="number" name="sacks" min="2" max="10" value="4" style="width:70px;">
-      <input type="number" name="reward" min="6" max="60" value="12" style="width:70px;">
-      <button class="secondary" type="submit">Post Supply</button>
+      <input type="number" name="sacks" min="2" max="10" value="4" style="width:70px;" {{ if $.Traveling }}disabled{{ end }}>
+      <input type="number" name="reward" min="6" max="60" value="12" style="width:70px;" {{ if $.Traveling }}disabled{{ end }}>
+      <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Post Supply</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="petition_institution">
-      <button class="secondary" type="submit">Petition</button>
+      <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Petition</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="bribe_official">
       <input type="hidden" name="amount" value="3">
-      <button class="secondary" type="submit">Bribe</button>
+      <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Bribe</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="broker_deal">
-      <button class="secondary" type="submit">Broker Deal</button>
+      <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Broker Deal</button>
     </form>
     <form hx-post="/action" hx-target="#dashboard" hx-swap="innerHTML">
       <input type="hidden" name="action" value="invoke_rite">
-      <button class="secondary" type="submit">Invoke Rite</button>
+      <button class="secondary" type="submit" {{ if $.Traveling }}disabled{{ end }}>Invoke Rite</button>
     </form>
   </div>
 </div>

@@ -175,6 +175,59 @@ func TestPermitExpiresOnInstitutionTick(t *testing.T) {
 	}
 }
 
+func TestBribeAccessAllowsEmergencyAcceptance(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	s.Policies.PermitRequiredHighRisk = true
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Emergency", DeadlineTicks: 3, Status: "Issued"}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "bribe_official", Amount: 3})
+	if p.BribeAccessTicks <= 0 {
+		t.Fatalf("expected bribe access ticks to be set")
+	}
+
+	handleActionLocked(s, p, now.Add(time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Accepted" || s.Contracts["c1"].OwnerPlayerID != p.ID {
+		t.Fatalf("expected emergency contract accepted with bribed access")
+	}
+}
+
+func TestBribeAccessBypassesSmugglingEmbargo(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	s.Policies.SmugglingEmbargoTicks = 2
+	s.Contracts["c1"] = &Contract{ID: "c1", Type: "Smuggling", DeadlineTicks: 3, Status: "Issued"}
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "bribe_official", Amount: 3})
+	handleActionLocked(s, p, now.Add(time.Second), "accept", "c1")
+	if s.Contracts["c1"].Status != "Accepted" || s.Contracts["c1"].OwnerPlayerID != p.ID {
+		t.Fatalf("expected smuggling contract accepted with bribed access during embargo")
+	}
+}
+
+func TestBribeAccessExpiresOnPlayerTick(t *testing.T) {
+	s := newTestStore()
+	now := time.Now().UTC()
+	p := &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.Players[p.ID] = p
+
+	handleActionInputLocked(s, p, now, ActionInput{Action: "bribe_official", Amount: 3})
+	if p.BribeAccessTicks <= 0 {
+		t.Fatalf("expected bribe access ticks to be set")
+	}
+	remaining := p.BribeAccessTicks
+	processPlayerTickLocked(s, now)
+	if p.BribeAccessTicks != remaining-1 {
+		t.Fatalf("expected bribe access to decrement by 1, got %d", p.BribeAccessTicks)
+	}
+}
+
 func TestInvestigateCooldownByTicks(t *testing.T) {
 	s := newTestStore()
 	now := time.Now().UTC()
