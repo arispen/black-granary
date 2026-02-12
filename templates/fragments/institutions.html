@@ -1,5 +1,5 @@
 {{ define "institutions_inner" }}
-<h3>Institutions</h3>
+<h3 class="heading-with-icon"><span class="icon icon-tint-violet" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/congress.png');" aria-hidden="true"></span>Institutions</h3>
 <div class="muted">Tax {{ .Policies.TaxRatePct }}% · Permit {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
 <div class="muted" style="margin-top:4px;">High impact remaining: {{ .HighImpactRemaining }} / {{ .HighImpactCap }}</div>
 {{ if .Traveling }}

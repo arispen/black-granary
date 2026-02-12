@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.21.0
+- Added colorful, CSS-tinted game icons across core panels (dashboard, events, chat, diplomacy, players, institutions, intel, ledger, market).
+- Introduced dynamic location and contract-type icons in the dashboard for faster visual scanning.
+- Added static `/assets/` serving so icon packs in the repository are delivered directly by the Go server.
+
 ## 0.20.0
 - Added Commander of the Watch seat with warrant issuance and time-bound warrant tracking.
 - Warranted targets now spawn boosted bounty rewards and show warrant status in the UI.

@@ -1,9 +1,9 @@
 {{ define "players_inner" }}
-<h3>Players</h3>
+<h3 class="heading-with-icon"><span class="icon icon-tint-blue" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/meeple-circle.png');" aria-hidden="true"></span>Players</h3>
 <div class="player-list">
   {{ range .Players }}
     <div class="player-line">
-      <strong>{{ .Name }}</strong>
+      <strong><span class="icon icon-sm icon-tint-{{ .IconTint }}" style="--icon-src: url('{{ .IconPath }}');" aria-hidden="true"></span>{{ .Name }}</strong>
       <span class="pill title-badge">{{ .Title }}</span>
       <div class="muted">{{ .Gold }}g · Rep {{ .Rep }} · Heat {{ .Heat }} ({{ .HeatLabel }}){{ if .Warrant }} · {{ .Warrant }}{{ end }} · {{ if .Online }}<span class="online">online</span>{{ else }}<span class="offline">away</span>{{ end }}</div>
     </div>

@@ -1,5 +1,5 @@
 {{ define "diplomacy_inner" }}
-<h3>Diplomacy</h3>
+<h3 class="heading-with-icon"><span class="icon icon-tint-teal" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/shaking-hands.png');" aria-hidden="true"></span>Diplomacy</h3>
 {{ if .HasOtherPlayers }}
   <form class="diplomacy-form" hx-post="/message" hx-target="#dashboard" hx-swap="innerHTML">
     <select name="target_id" aria-label="Diplomacy target">

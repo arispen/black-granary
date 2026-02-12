@@ -214,6 +214,20 @@ func TestFragEndpointsReturnInnerContentForPolling(t *testing.T) {
 	}
 }
 
+func TestAssetsAreServed(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+
+	resp := doReq(t, mux, http.MethodGet, "/assets/icons/license.txt", nil, "", "127.0.0.1:1111")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /assets/icons/license.txt status=%d", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), "https://game-icons.net") {
+		t.Fatalf("asset payload should include expected license content")
+	}
+}
+
 func TestActionAndChatRateLimits(t *testing.T) {
 	s := newTestStore()
 	tmpl := parseTemplates()

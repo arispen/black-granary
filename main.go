@@ -433,6 +433,8 @@ type PlayerSummary struct {
 	HeatLabel string
 	Warrant   string
 	Online    bool
+	IconPath  string
+	IconTint  string
 }
 
 type ContractView struct {
@@ -459,6 +461,8 @@ type ContractView struct {
 	RewardNote      string
 	IsBounty        bool
 	IsSupply        bool
+	IconPath        string
+	IconTint        string
 }
 
 type StandingView struct {
@@ -656,6 +660,8 @@ type LocationOption struct {
 	TravelTicks int
 	Disabled    bool
 	Reason      string
+	IconPath    string
+	IconTint    string
 }
 
 type PageData struct {
@@ -722,6 +728,8 @@ type PageData struct {
 	PlayerOptions           []PlayerOption
 	LocationName            string
 	LocationDescription     string
+	LocationIconPath        string
+	LocationIconTint        string
 	Traveling               bool
 	TravelDestination       string
 	TravelTicksLeft         int
@@ -770,6 +778,7 @@ func main() {
 
 func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1964,6 +1973,40 @@ func locationName(id string) string {
 		return def.Name
 	}
 	return "Unknown"
+}
+
+func iconAsset(artist, name string) string {
+	return fmt.Sprintf("/assets/icons/ffffff/transparent/1x1/%s/%s.png", artist, name)
+}
+
+func locationIcon(id string) (string, string) {
+	switch id {
+	case locationCapital:
+		return iconAsset("delapouite", "castle"), "gold"
+	case locationHarbor:
+		return iconAsset("delapouite", "lighthouse"), "teal"
+	case locationFrontier:
+		return iconAsset("delapouite", "village"), "amber"
+	case locationRuins:
+		return iconAsset("delapouite", "crystal-shrine"), "violet"
+	default:
+		return iconAsset("delapouite", "earth-america"), "blue"
+	}
+}
+
+func contractTypeIcon(contractType string) (string, string) {
+	switch contractType {
+	case "Emergency":
+		return iconAsset("delapouite", "factory-arm"), "amber"
+	case "Smuggling":
+		return iconAsset("delapouite", "lighthouse"), "teal"
+	case "Bounty":
+		return iconAsset("delapouite", "sword-altar"), "red"
+	case "Supply":
+		return iconAsset("delapouite", "warehouse"), "lime"
+	default:
+		return iconAsset("delapouite", "perspective-dice-six"), "blue"
+	}
 }
 
 func travelTicksBetween(from, to string) int {
@@ -4028,6 +4071,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if isBounty || isSupply {
 			stanceValue = ""
 		}
+		iconPath, iconTint := contractTypeIcon(c.Type)
 		return ContractView{
 			ID:              c.ID,
 			Type:            c.Type,
@@ -4052,6 +4096,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			RewardNote:      rewardNote,
 			IsBounty:        isBounty,
 			IsSupply:        isSupply,
+			IconPath:        iconPath,
+			IconTint:        iconTint,
 		}
 	}
 
@@ -4152,6 +4198,11 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if warrant := warrantForPlayerLocked(store, pl.ID); warrant != nil {
 			warrantLabel = fmt.Sprintf("Warrant (%dt)", warrant.TicksLeft)
 		}
+		isOnline := now.Sub(pl.LastSeen) <= onlineWindow
+		iconTint := "blue"
+		if isOnline {
+			iconTint = "lime"
+		}
 		players = append(players, PlayerSummary{
 			Name:      pl.Name,
 			Rep:       pl.Rep,
@@ -4160,7 +4211,9 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 			Heat:      pl.Heat,
 			HeatLabel: standingHeatLabel(pl.Heat),
 			Warrant:   warrantLabel,
-			Online:    now.Sub(pl.LastSeen) <= onlineWindow,
+			Online:    isOnline,
+			IconPath:  iconAsset("delapouite", "meeple-circle"),
+			IconTint:  iconTint,
 		})
 	}
 	sort.Slice(players, func(i, j int) bool { return players[i].Name < players[j].Name })
@@ -4257,6 +4310,7 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		p.LocationID = locationCapital
 	}
 	locationDef, _ := locationByID(p.LocationID)
+	locationIconPath, locationIconTint := locationIcon(p.LocationID)
 	traveling := p.TravelTicksLeft > 0
 	travelDestination := ""
 	if traveling {
@@ -4284,12 +4338,15 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		if disabled {
 			reason = "Travel in progress."
 		}
+		optionIconPath, optionIconTint := locationIcon(def.ID)
 		locationOptions = append(locationOptions, LocationOption{
 			ID:          def.ID,
 			Name:        def.Name,
 			TravelTicks: travelTicksBetween(p.LocationID, def.ID),
 			Disabled:    disabled,
 			Reason:      reason,
+			IconPath:    optionIconPath,
+			IconTint:    optionIconTint,
 		})
 	}
 
@@ -4759,6 +4816,8 @@ func buildPageDataLocked(store *Store, playerID string, consumeToast bool) PageD
 		PlayerOptions:           playerOptions,
 		LocationName:            locationDef.Name,
 		LocationDescription:     locationDef.Description,
+		LocationIconPath:        locationIconPath,
+		LocationIconTint:        locationIconTint,
 		Traveling:               traveling,
 		TravelDestination:       travelDestination,
 		TravelTicksLeft:         p.TravelTicksLeft,

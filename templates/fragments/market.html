@@ -1,5 +1,5 @@
 {{ define "market_inner" }}
-<h3>Market</h3>
+<h3 class="heading-with-icon"><span class="icon icon-tint-gold" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/coins-pile.png');" aria-hidden="true"></span>Market</h3>
 <div class="muted">Buy {{ .MarketBuyPrice }}g · Sell {{ .MarketSellPrice }}g · Stock {{ .MarketSupplySacks }} sacks</div>
 {{ if .MarketControlsActive }}
   <div class="muted">Market controls active: {{ .MarketControlsTicks }} ticks</div>

@@ -1,6 +1,6 @@
 {{ define "dashboard" }}
 <div class="card">
-  <h2>Today's Situation</h2>
+  <h2 class="heading-with-icon"><span class="icon icon-tint-gold" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/checklist.png');" aria-hidden="true"></span>Today's Situation</h2>
   <div class="situation">{{ .Situation }}</div>
   <div class="status-grid">
     <div class="card"><strong>Grain</strong><br>{{ .World.GrainTier }}</div>
@@ -9,7 +9,7 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Crisis Watch</h3>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-red" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/crystal-shrine.png');" aria-hidden="true"></span>Crisis Watch</h3>
   {{ if .Crisis }}
     <div><strong>{{ .Crisis.Name }}</strong> <span class="pill">Severity {{ .Crisis.Severity }}</span></div>
     <div class="muted" style="margin-top:6px;">{{ .Crisis.Description }}</div>
@@ -28,7 +28,7 @@
   {{ end }}
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Your Standing in Black Granary</h3>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-blue" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/meeple-circle.png');" aria-hidden="true"></span>Your Standing in Black Granary</h3>
   <div class="status-grid">
     <div class="card"><strong>Reputation</strong><br>{{ .Standing.ReputationValue }} · {{ .Standing.ReputationLabel }}</div>
     <div class="card"><strong>Heat</strong><br>{{ .Standing.HeatValue }} · {{ .Standing.HeatLabel }}</div>
@@ -44,8 +44,8 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Travel & Fieldwork</h3>
-  <div><strong>Location</strong><br>{{ .LocationName }}</div>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-teal" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/lorc/journey.png');" aria-hidden="true"></span>Travel & Fieldwork</h3>
+  <div><strong>Location</strong><br><span class="icon icon-sm icon-tint-{{ .LocationIconTint }}" style="--icon-src: url('{{ .LocationIconPath }}');" aria-hidden="true"></span>{{ .LocationName }}</div>
   <div class="muted" style="margin-top:6px;">{{ .LocationDescription }}</div>
   {{ if .Traveling }}
     <div class="muted" style="margin-top:6px;">En route to {{ .TravelDestination }} · {{ .TravelTicksLeft }} / {{ .TravelTotalTicks }} ticks left</div>
@@ -78,7 +78,7 @@
   {{ end }}
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Relics</h3>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-violet" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/crystal-shrine.png');" aria-hidden="true"></span>Relics</h3>
   <div class="muted">Appraise relics in the Capital for {{ .RelicAppraiseCost }}g.</div>
   <div class="contracts" style="margin-top:8px;">
     {{ range .Relics }}
@@ -116,7 +116,7 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Institutions and Offices</h3>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-violet" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/congress.png');" aria-hidden="true"></span>Institutions and Offices</h3>
   <div class="muted">Tax: {{ .Policies.TaxRatePct }}% · Permit: {{ if .Policies.PermitRequiredHighRisk }}Required{{ else }}Open{{ end }} · Embargo: {{ .Policies.SmugglingEmbargoTicks }} ticks</div>
   <div class="contracts" style="margin-top:8px;">
     {{ range .Seats }}
@@ -207,7 +207,7 @@
   </div>
 </div>
 <div class="card" style="margin-top:12px;">
-  <h3>Contracts</h3>
+  <h3 class="heading-with-icon"><span class="icon icon-tint-amber" style="--icon-src: url('/assets/icons/ffffff/transparent/1x1/delapouite/contract.png');" aria-hidden="true"></span>Contracts</h3>
   <div class="muted">Accepted by you: {{ .AcceptedCount }} · Showing: {{ .VisibleContractN }} / {{ .TotalContractN }}</div>
   {{ if .Traveling }}
     <div class="muted" style="margin-top:4px;">Travel in progress: contract actions are paused.</div>
@@ -215,7 +215,7 @@
   <div class="contracts" style="margin-top:8px;">
     {{ range .Contracts }}
       <div class="contract {{ .UrgencyClass }}">
-        <div><strong>{{ .Type }}</strong> <span class="pill">{{ .Status }}</span></div>
+        <div><strong><span class="icon icon-sm icon-tint-{{ .IconTint }}" style="--icon-src: url('{{ .IconPath }}');" aria-hidden="true"></span>{{ .Type }}</strong> <span class="pill">{{ .Status }}</span></div>
         <div class="meta">
           <span>Deadline: {{ .DeadlineTicks }} ticks</span>
           <span>Taken by: {{ .OwnerName }}</span>
