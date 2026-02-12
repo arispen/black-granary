@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 const (
@@ -827,6 +829,7 @@ var nameFirst = []string{"Ash", "Bran", "Corin", "Dain", "Elow", "Fenn", "Garr",
 var nameLast = []string{"Stone", "Vale", "Thorne", "Mire", "Brindle", "Hollow", "Reed", "Kestrel", "Cinder", "Rook", "Fen", "Crow", "Wick", "Hearth", "Barrow"}
 
 func main() {
+	loadDotEnv()
 	tmpl := parseTemplates()
 	store, err := newConfiguredStore()
 	if err != nil {
@@ -846,6 +849,15 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Fatal(server.ListenAndServe())
+}
+
+func loadDotEnv() {
+	if _, err := os.Stat(".env"); err != nil {
+		return
+	}
+	if err := godotenv.Load(); err != nil {
+		log.Printf("warning: failed to load .env: %v", err)
+	}
 }
 
 func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
