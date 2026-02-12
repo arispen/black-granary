@@ -26,7 +26,11 @@ func doReq(t *testing.T, mux http.Handler, method, target string, form url.Value
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if pid != "" {
-		req.AddCookie(&http.Cookie{Name: cookieName, Value: pid})
+		cookieValue := pid
+		if _, ok := parsePlayerCookieValue(pid); !ok {
+			cookieValue = playerCookieValue(pid)
+		}
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
 	}
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -446,4 +450,48 @@ func TestAdminProtectionTickAndReset(t *testing.T) {
 		t.Fatalf("reset should clear world state")
 	}
 	s.mu.Unlock()
+}
+
+func TestUnsignedPidCookieIsRejected(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+	now := time.Now().UTC().Add(-time.Minute)
+
+	s.mu.Lock()
+	s.Players["p1"] = &Player{ID: "p1", Name: "Ash Crow (Guest)", Gold: 20, Rep: 0, LastSeen: now}
+	s.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/frag/dashboard", nil)
+	req.RemoteAddr = "127.0.0.1:1111"
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: "p1"})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /frag/dashboard status=%d", rr.Code)
+	}
+
+	newCookie := cookieFromResponse(rr, cookieName)
+	if newCookie == "" {
+		t.Fatalf("expected handler to rotate invalid pid cookie")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Players["p1"].LastSeen != now {
+		t.Fatalf("unsigned cookie should not authenticate existing player")
+	}
+}
+
+func TestChatRejectsOversizedFormBody(t *testing.T) {
+	s := newTestStore()
+	tmpl := parseTemplates()
+	mux := newMux(s, tmpl)
+
+	tooBig := strings.Repeat("a", maxFormBodyBytes+1)
+	form := url.Values{"text": {tooBig}}
+	resp := doReq(t, mux, http.MethodPost, "/chat", form, "p1", "127.0.0.1:1111")
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected oversized body to be rejected, got %d", resp.Code)
+	}
 }

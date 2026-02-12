@@ -5,8 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/json"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -30,6 +31,8 @@ const (
 	adminCSRFCookieName         = "admin_csrf"
 	adminAuthHeaderName         = "X-Admin-Token"
 	adminCSRFHeaderName         = "X-CSRF-Token"
+	playerCookieSecretEnvName   = "PLAYER_COOKIE_SECRET"
+	playerCookieSecureEnvName   = "PLAYER_COOKIE_SECURE"
 	adminTokenEnvName           = "ADMIN_TOKEN"
 	adminLoopbackEnvName        = "ALLOW_LOOPBACK_ADMIN"
 	adminCookieSecureEnvName    = "ADMIN_COOKIE_SECURE"
@@ -95,6 +98,12 @@ const (
 	inquestRumorDecayDrop       = 2
 	adminResetConfirmPhrase     = "RESET WORLD"
 	adminMaxManualTicks         = 24
+	maxFormBodyBytes            = 1 << 20
+)
+
+var (
+	playerCookieSecretOnce sync.Once
+	playerCookieSecret     []byte
 )
 
 type WorldState struct {
@@ -444,35 +453,35 @@ type Store struct {
 }
 
 type AdminDiagnostics struct {
-	TotalPlayers             int      `json:"total_players"`
-	OnlinePlayers            int      `json:"online_players"`
-	TravelingPlayers         int      `json:"traveling_players"`
-	TotalGold                int      `json:"total_gold"`
-	TotalGrain               int      `json:"total_grain"`
-	AvgGoldPerPlayer         int      `json:"avg_gold_per_player"`
-	AvgGrainPerPlayer        int      `json:"avg_grain_per_player"`
-	AvgRep                   int      `json:"avg_rep"`
-	AvgHeat                  int      `json:"avg_heat"`
-	RichestPlayer            string   `json:"richest_player"`
-	RichestGold              int      `json:"richest_gold"`
-	RichestSharePct          int      `json:"richest_share_pct"`
-	HottestPlayer            string   `json:"hottest_player"`
-	HottestHeat              int      `json:"hottest_heat"`
-	HighestRepPlayer         string   `json:"highest_rep_player"`
-	HighestRep               int      `json:"highest_rep"`
-	LowestRepPlayer          string   `json:"lowest_rep_player"`
-	LowestRep                int      `json:"lowest_rep"`
-	ContractsIssued          int      `json:"contracts_issued"`
-	ContractsAccepted        int      `json:"contracts_accepted"`
-	ContractsFulfilled       int      `json:"contracts_fulfilled"`
-	ContractsFailed          int      `json:"contracts_failed"`
-	OverdueActiveContracts   int      `json:"overdue_active_contracts"`
-	ContractStateAnomalies   int      `json:"contract_state_anomalies"`
-	OverdueActiveLoans       int      `json:"overdue_active_loans"`
-	OverdueOpenObligations   int      `json:"overdue_open_obligations"`
-	WorldPressureLevel       string   `json:"world_pressure_level"`
-	AlertCount               int      `json:"alert_count"`
-	Alerts                   []string `json:"alerts"`
+	TotalPlayers           int      `json:"total_players"`
+	OnlinePlayers          int      `json:"online_players"`
+	TravelingPlayers       int      `json:"traveling_players"`
+	TotalGold              int      `json:"total_gold"`
+	TotalGrain             int      `json:"total_grain"`
+	AvgGoldPerPlayer       int      `json:"avg_gold_per_player"`
+	AvgGrainPerPlayer      int      `json:"avg_grain_per_player"`
+	AvgRep                 int      `json:"avg_rep"`
+	AvgHeat                int      `json:"avg_heat"`
+	RichestPlayer          string   `json:"richest_player"`
+	RichestGold            int      `json:"richest_gold"`
+	RichestSharePct        int      `json:"richest_share_pct"`
+	HottestPlayer          string   `json:"hottest_player"`
+	HottestHeat            int      `json:"hottest_heat"`
+	HighestRepPlayer       string   `json:"highest_rep_player"`
+	HighestRep             int      `json:"highest_rep"`
+	LowestRepPlayer        string   `json:"lowest_rep_player"`
+	LowestRep              int      `json:"lowest_rep"`
+	ContractsIssued        int      `json:"contracts_issued"`
+	ContractsAccepted      int      `json:"contracts_accepted"`
+	ContractsFulfilled     int      `json:"contracts_fulfilled"`
+	ContractsFailed        int      `json:"contracts_failed"`
+	OverdueActiveContracts int      `json:"overdue_active_contracts"`
+	ContractStateAnomalies int      `json:"contract_state_anomalies"`
+	OverdueActiveLoans     int      `json:"overdue_active_loans"`
+	OverdueOpenObligations int      `json:"overdue_open_obligations"`
+	WorldPressureLevel     string   `json:"world_pressure_level"`
+	AlertCount             int      `json:"alert_count"`
+	Alerts                 []string `json:"alerts"`
 }
 
 type PlayerSummary struct {
@@ -828,7 +837,15 @@ func main() {
 	mux := newMux(store, tmpl)
 
 	log.Printf("listening on http://localhost%s", serverAddr)
-	log.Fatal(http.ListenAndServe(serverAddr, mux))
+	server := &http.Server{
+		Addr:              serverAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Fatal(server.ListenAndServe())
 }
 
 func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
@@ -984,8 +1001,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		if !parsePostFormLimited(w, r, maxFormBodyBytes) {
 			return
 		}
 
@@ -1036,8 +1052,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		if !parsePostFormLimited(w, r, maxFormBodyBytes) {
 			return
 		}
 
@@ -1078,8 +1093,7 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		if !parsePostFormLimited(w, r, maxFormBodyBytes) {
 			return
 		}
 
@@ -1266,11 +1280,11 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		payload := map[string]any{
-			"generated_at": time.Now().UTC().Format(time.RFC3339),
-			"tick_count":   store.TickCount,
-			"world":        store.World,
+			"generated_at":  time.Now().UTC().Format(time.RFC3339),
+			"tick_count":    store.TickCount,
+			"world":         store.World,
 			"active_crisis": store.ActiveCrisis,
-			"diagnostics":  buildAdminDiagnosticsLocked(store, time.Now().UTC()),
+			"diagnostics":   buildAdminDiagnosticsLocked(store, time.Now().UTC()),
 			"counts": map[string]int{
 				"players":      len(store.Players),
 				"contracts":    len(store.Contracts),
@@ -1305,6 +1319,9 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if !parsePostFormLimited(w, r, maxFormBodyBytes) {
+			return
+		}
 		if !hasValidAdminHeaderToken(r) && !validateAdminCSRF(r) {
 			http.Error(w, "invalid csrf token", http.StatusForbidden)
 			return
@@ -1336,6 +1353,9 @@ func newMux(store *Store, tmpl *template.Template) *http.ServeMux {
 		}
 		if !isAdmin(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !parsePostFormLimited(w, r, maxFormBodyBytes) {
 			return
 		}
 		if !hasValidAdminHeaderToken(r) && !validateAdminCSRF(r) {
@@ -3853,15 +3873,19 @@ func adjustHeatForDeliveryLocked(p *Player, contractType string) {
 func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *Player {
 	var pid string
 	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
-		pid = c.Value
-	} else {
+		if parsed, ok := parsePlayerCookieValue(c.Value); ok {
+			pid = parsed
+		}
+	}
+	if pid == "" {
 		pid = generateID()
 		http.SetCookie(w, &http.Cookie{
 			Name:     cookieName,
-			Value:    pid,
+			Value:    playerCookieValue(pid),
 			Path:     "/",
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
+			Secure:   envBool(playerCookieSecureEnvName, requestIsHTTPS(r)),
 		})
 	}
 
@@ -3878,6 +3902,61 @@ func ensurePlayerLocked(store *Store, w http.ResponseWriter, r *http.Request) *P
 		p.LocationID = locationCapital
 	}
 	return p
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	xfp := strings.TrimSpace(strings.ToLower(r.Header.Get("X-Forwarded-Proto")))
+	return xfp == "https"
+}
+
+func playerCookieValue(playerID string) string {
+	return playerID + "." + signPlayerCookieValue(playerID)
+}
+
+func parsePlayerCookieValue(raw string) (string, bool) {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 2 {
+		return "", false
+	}
+	playerID := strings.TrimSpace(parts[0])
+	signature := strings.TrimSpace(parts[1])
+	if playerID == "" || signature == "" {
+		return "", false
+	}
+	if !secureStringEqual(signature, signPlayerCookieValue(playerID)) {
+		return "", false
+	}
+	return playerID, true
+}
+
+func signPlayerCookieValue(playerID string) string {
+	h := hmac.New(sha256.New, getPlayerCookieSecret())
+	_, _ = io.WriteString(h, "black-granary-player-cookie-v1:")
+	_, _ = io.WriteString(h, playerID)
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+func getPlayerCookieSecret() []byte {
+	playerCookieSecretOnce.Do(func() {
+		secret := strings.TrimSpace(os.Getenv(playerCookieSecretEnvName))
+		if secret != "" {
+			playerCookieSecret = []byte(secret)
+			return
+		}
+		generated, err := generateIDFromRandomBytes(32)
+		if err != nil {
+			playerCookieSecret = []byte(fmt.Sprintf("fallback-%d", time.Now().UnixNano()))
+			return
+		}
+		playerCookieSecret = []byte(generated)
+	})
+	return playerCookieSecret
 }
 
 func uniqueGuestNameLocked(store *Store) string {
@@ -5170,6 +5249,20 @@ func envBool(name string, fallback bool) bool {
 	}
 }
 
+func parsePostFormLimited(w http.ResponseWriter, r *http.Request, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	if err := r.ParseForm(); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request entity too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func issueAdminSessionCookies(w http.ResponseWriter, r *http.Request) (string, error) {
 	token := strings.TrimSpace(os.Getenv(adminTokenEnvName))
 	if token == "" && !envBool(adminLoopbackEnvName, false) {
@@ -5223,10 +5316,10 @@ func validateAdminCSRF(r *http.Request) bool {
 
 func buildAdminDiagnosticsLocked(store *Store, now time.Time) AdminDiagnostics {
 	diag := AdminDiagnostics{
-		TotalPlayers:      len(store.Players),
-		OnlinePlayers:     len(onlinePlayersLocked(store, now)),
+		TotalPlayers:       len(store.Players),
+		OnlinePlayers:      len(onlinePlayersLocked(store, now)),
 		WorldPressureLevel: "Normal",
-		Alerts:            []string{},
+		Alerts:             []string{},
 	}
 	if store.World.GrainTier == "Critical" || store.World.UnrestTier == "Unstable" {
 		diag.WorldPressureLevel = "Severe"
